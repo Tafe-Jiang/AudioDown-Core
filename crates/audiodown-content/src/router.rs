@@ -14,6 +14,8 @@ use futures_util::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::{deduplicate_items, deduplicate_sections};
+
 const PLATFORM_CONCURRENCY: usize = 4;
 
 #[derive(Debug, Clone)]
@@ -249,6 +251,7 @@ where
             aggregate.items.extend(result.items);
             aggregate.failures.extend(result.failures);
         }
+        aggregate.items = deduplicate_items(aggregate.items);
         Ok(aggregate)
     }
 
@@ -301,6 +304,7 @@ where
             aggregate.sections.extend(result.sections);
             aggregate.failures.extend(result.failures);
         }
+        deduplicate_sections(&mut aggregate.sections);
         Ok(aggregate)
     }
 }

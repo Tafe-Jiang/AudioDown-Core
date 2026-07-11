@@ -9,9 +9,11 @@ rust-version.workspace = true
 async-trait.workspace = true
 audiodown-domain = { path = "../audiodown-domain" }
 audiodown-plugin-api = { path = "../audiodown-plugin-api" }
+base64.workspace = true
 futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
