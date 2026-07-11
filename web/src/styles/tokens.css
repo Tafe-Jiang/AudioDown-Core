@@ -5,31 +5,31 @@
   --card-foreground: #1d2326;
   --popover: #ffffff;
   --popover-foreground: #1d2326;
-  --primary: #d65343;
+  --primary: #c54436;
   --primary-foreground: #ffffff;
   --secondary: #eef1ef;
   --secondary-foreground: #30383b;
   --muted: #eef1ef;
-  --muted-foreground: #687370;
+  --muted-foreground: #64706d;
   --accent: #e7ebe9;
   --accent-foreground: #20272a;
-  --destructive: #b63e34;
+  --destructive: #a9372e;
   --destructive-foreground: #ffffff;
   --border: #d6dcda;
   --input: #c8d0cd;
-  --ring: #d65343;
+  --ring: #c54436;
   --radius: 0.375rem;
   --sidebar: #252b2e;
   --sidebar-foreground: #dce2df;
-  --sidebar-primary: #d65343;
+  --sidebar-primary: #c54436;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #353d40;
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: #171b1d;
   --sidebar-ring: #e7796d;
-  --status-success: #277a5c;
-  --status-warning: #a56b12;
-  --status-danger: #b63e34;
+  --status-success: #247052;
+  --status-warning: #8a570b;
+  --status-danger: #a9372e;
 }
 
 @theme inline {

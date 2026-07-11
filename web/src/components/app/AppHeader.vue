@@ -43,9 +43,12 @@ const triggerLabel = computed(() => {
       />
       <span class="hidden text-sm font-semibold md:inline">AudioDown</span>
       <span class="hidden text-muted-foreground md:inline">/</span>
-      <h1 class="truncate text-sm font-medium text-foreground">
+      <span
+        data-page-context-title
+        class="truncate text-sm font-medium text-foreground"
+      >
         {{ title }}
-      </h1>
+      </span>
 
       <div class="ml-auto flex shrink-0 items-center">
         <span

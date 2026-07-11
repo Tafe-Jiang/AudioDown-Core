@@ -23,18 +23,28 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-const props = defineProps<{
-  plugin: PluginItem;
-  busy: boolean;
-  supervisorAvailable: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    plugin: PluginItem;
+    busy: boolean;
+    supervisorAvailable: boolean;
+    context?: "desktop" | "mobile";
+  }>(),
+  {
+    context: "desktop",
+  },
+);
 
 const emit = defineEmits<{
   start: [];
   stop: [];
-  settings: [];
+  settings: [triggerId: string];
   uninstall: [];
 }>();
+
+function triggerId() {
+  return `${props.context}-plugin-actions-${props.plugin.pluginId}`;
+}
 
 function isRunning() {
   return ["running", "starting", "healthy"].includes(props.plugin.status);
@@ -80,6 +90,7 @@ function isRunning() {
     <DropdownMenu>
       <DropdownMenuTrigger as-child>
         <Button
+          :id="triggerId()"
           type="button"
           variant="ghost"
           size="icon-sm"
@@ -93,7 +104,7 @@ function isRunning() {
         <DropdownMenuItem
           data-action="settings"
           :disabled="!supervisorAvailable"
-          @select="emit('settings')"
+          @select="emit('settings', triggerId())"
         >
           <Settings2 aria-hidden="true" />
           设置

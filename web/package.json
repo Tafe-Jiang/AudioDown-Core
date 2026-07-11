@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "dev": "vite",
     "test": "vitest",
+    "test:a11y": "playwright test tests/accessibility.spec.ts",
+    "test:e2e": "playwright test",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
@@ -22,6 +25,8 @@
     "vue-sonner": "2.0.9"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1",
     "@tailwindcss/vite": "4.3.2",
     "@types/node": "26.1.1",
     "@vue/test-utils": "2.4.11",

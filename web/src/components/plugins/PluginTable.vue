@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, nextTick, reactive, ref } from "vue";
 import { TriangleAlert } from "@lucide/vue";
 import { toast } from "vue-sonner";
 
@@ -20,7 +20,6 @@ import {
 } from "@/components/ui/alert";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -38,6 +37,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 
 const props = defineProps<{
   items: PluginItem[];
@@ -52,6 +52,7 @@ const busy = reactive<Record<string, boolean>>({});
 const errors = reactive<Record<string, string>>({});
 const enabledOverrides = reactive<Record<string, boolean | undefined>>({});
 const settingsPlugin = ref<PluginItem | null>(null);
+const settingsReturnFocusId = ref("");
 const uninstallPlugin = ref<PluginItem | null>(null);
 const settingsOpen = computed(() => settingsPlugin.value !== null);
 
@@ -157,9 +158,19 @@ async function runCommand(plugin: PluginItem, command: "start" | "stop") {
   }
 }
 
-function openSettings(plugin: PluginItem) {
+function openSettings(plugin: PluginItem, returnFocusId: string) {
   settingsPlugin.value = displayPlugin(plugin);
+  settingsReturnFocusId.value = returnFocusId;
   setError(plugin.pluginId);
+}
+
+function closeSettings() {
+  const returnFocusId = settingsReturnFocusId.value;
+  settingsPlugin.value = null;
+  settingsReturnFocusId.value = "";
+  void nextTick(() => {
+    document.getElementById(returnFocusId)?.focus();
+  });
 }
 
 async function saveSettings(settings: PluginSettings) {
@@ -172,7 +183,7 @@ async function saveSettings(settings: PluginSettings) {
   try {
     await api.updatePlugin(plugin.pluginId, settings);
     await refreshItems();
-    settingsPlugin.value = null;
+    closeSettings();
     toast.success("插件设置已保存");
   } catch {
     setError(plugin.pluginId, "保存插件设置失败，请检查统一日志后重试");
@@ -268,9 +279,10 @@ async function confirmUninstall() {
                   :plugin="displayPlugin(plugin)"
                   :busy="pluginBusy(plugin.pluginId)"
                   :supervisor-available="supervisorAvailable"
+                  context="desktop"
                   @start="runCommand(plugin, 'start')"
                   @stop="runCommand(plugin, 'stop')"
-                  @settings="openSettings(plugin)"
+                  @settings="openSettings(plugin, $event)"
                   @uninstall="uninstallPlugin = plugin"
                 />
               </TableCell>
@@ -306,6 +318,9 @@ async function confirmUninstall() {
           <span class="block truncate text-xs text-muted-foreground">
             {{ plugin.pluginType }} · {{ plugin.version }}
           </span>
+          <span class="block break-all text-xs text-muted-foreground">
+            {{ plugin.pluginId }}
+          </span>
         </div>
         <StatusBadge
           :tone="statusPresentation(plugin.status).tone"
@@ -339,9 +354,10 @@ async function confirmUninstall() {
           :plugin="displayPlugin(plugin)"
           :busy="pluginBusy(plugin.pluginId)"
           :supervisor-available="supervisorAvailable"
+          context="mobile"
           @start="runCommand(plugin, 'start')"
           @stop="runCommand(plugin, 'stop')"
-          @settings="openSettings(plugin)"
+          @settings="openSettings(plugin, $event)"
           @uninstall="uninstallPlugin = plugin"
         />
       </div>
@@ -363,7 +379,7 @@ async function confirmUninstall() {
         settingsPlugin ? pluginBusy(settingsPlugin.pluginId) : false
       "
       :error="settingsPlugin ? errors[settingsPlugin.pluginId] ?? '' : ''"
-      @update:open="!$event && (settingsPlugin = null)"
+      @update:open="!$event && closeSettings()"
       @save="saveSettings"
     />
 
@@ -382,7 +398,8 @@ async function confirmUninstall() {
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>取消</AlertDialogCancel>
-          <AlertDialogAction
+          <Button
+            type="button"
             variant="destructive"
             :disabled="
               uninstallPlugin
@@ -392,7 +409,7 @@ async function confirmUninstall() {
             @click="confirmUninstall"
           >
             确认卸载
-          </AlertDialogAction>
+          </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
