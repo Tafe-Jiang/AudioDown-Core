@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use thiserror::Error;
 
+pub mod archive;
 pub mod github;
 
 #[async_trait]
@@ -44,4 +45,28 @@ pub enum PluginManagerError {
     ArchiveTooLarge,
     #[error("snapshot filesystem operation failed")]
     SnapshotIo,
+    #[error("repository archive exceeds the compressed size limit")]
+    ArchiveCompressedTooLarge,
+    #[error("repository archive path escapes its root")]
+    ArchivePathEscape,
+    #[error("repository archive contains an unsupported entry")]
+    ArchiveUnsupportedEntry,
+    #[error("repository archive contains multiple top-level directories")]
+    ArchiveMultipleRoots,
+    #[error("repository archive contains a duplicate normalized path")]
+    ArchiveDuplicatePath,
+    #[error("repository archive contains a case-folded path conflict")]
+    ArchiveCaseConflict,
+    #[error("repository archive contains a non-UTF-8 path")]
+    ArchiveNonUtf8Path,
+    #[error("repository archive contains too many files")]
+    ArchiveTooManyFiles,
+    #[error("repository archive contains an oversized file")]
+    ArchiveFileTooLarge,
+    #[error("repository archive exceeds the extracted size limit")]
+    ArchiveExtractedTooLarge,
+    #[error("repository archive is invalid")]
+    ArchiveInvalid,
+    #[error("repository archive filesystem operation failed")]
+    ArchiveIo,
 }
