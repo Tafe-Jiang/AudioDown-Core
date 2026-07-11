@@ -12,6 +12,7 @@ const TRUSTED_IMAGE_LABEL: &str = "io.audiodown.trusted-image";
 const IMAGE_KIND_LABEL: &str = "io.audiodown.trusted-image-kind";
 const BASE_DIGEST_LABEL: &str = "io.audiodown.base-image-digest";
 const SDK_HASH_LABEL: &str = "io.audiodown.sdk-hash";
+const ASSET_HASH_LABEL: &str = "io.audiodown.asset-hash";
 const POLICY_VERSION_LABEL: &str = "io.audiodown.build-policy-version";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -91,12 +92,14 @@ pub fn trusted_image_labels(
     kind: TrustedImageKind,
     base_digest: &str,
     sdk_hash: &str,
+    asset_hash: &str,
 ) -> HashMap<String, String> {
     HashMap::from([
         (TRUSTED_IMAGE_LABEL.to_string(), "true".to_string()),
         (IMAGE_KIND_LABEL.to_string(), kind.label_value().to_string()),
         (BASE_DIGEST_LABEL.to_string(), base_digest.to_string()),
         (SDK_HASH_LABEL.to_string(), sdk_hash.to_string()),
+        (ASSET_HASH_LABEL.to_string(), asset_hash.to_string()),
         (POLICY_VERSION_LABEL.to_string(), POLICY_VERSION.to_string()),
     ])
 }
@@ -105,12 +108,16 @@ pub fn verify_trusted_image_labels(
     kind: TrustedImageKind,
     base_digest: &str,
     sdk_hash: &str,
+    asset_hash: &str,
     labels: &HashMap<String, String>,
 ) -> Result<(), TrustedImageError> {
-    if !is_sha256_digest(base_digest) || !is_lower_hex_sha256(sdk_hash) {
+    if !is_sha256_digest(base_digest)
+        || !is_lower_hex_sha256(sdk_hash)
+        || !is_lower_hex_sha256(asset_hash)
+    {
         return Err(TrustedImageError::InvalidAttestation);
     }
-    let expected = trusted_image_labels(kind, base_digest, sdk_hash);
+    let expected = trusted_image_labels(kind, base_digest, sdk_hash, asset_hash);
     if expected
         .iter()
         .all(|(key, value)| labels.get(key) == Some(value))

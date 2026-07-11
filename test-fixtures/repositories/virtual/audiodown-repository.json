@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0",
+  "repository": {
+    "id": "example.plugins",
+    "name": "Example Virtual Plugins"
+  },
+  "plugins": [
+    {
+      "path": "plugins/virtual-content"
+    },
+    {
+      "path": "plugins/virtual-build-risk"
+    }
+  ]
+}

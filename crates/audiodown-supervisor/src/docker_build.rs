@@ -9,20 +9,21 @@ use async_trait::async_trait;
 use audiodown_supervisor_protocol::{PluginBuildLog, PluginBuildLogStream, PluginInstallArtifact};
 use bollard::{
     container::LogOutput,
+    exec::{StartExecOptions, StartExecResults},
     models::{
-        ContainerConfig, ContainerCreateBody, EndpointSettings, HostConfig, NetworkConnectRequest,
-        NetworkCreateRequest, NetworkingConfig,
+        ContainerConfig, ContainerCreateBody, EndpointSettings, ExecConfig, HostConfig,
+        NetworkConnectRequest, NetworkCreateRequest, NetworkingConfig,
     },
     query_parameters::{
         BuildImageOptionsBuilder, CommitContainerOptionsBuilder, CreateContainerOptionsBuilder,
-        DownloadFromContainerOptionsBuilder, LogsOptionsBuilder, StopContainerOptionsBuilder,
-        UploadToContainerOptionsBuilder,
+        LogsOptionsBuilder, StopContainerOptionsBuilder, UploadToContainerOptionsBuilder,
     },
     Docker,
 };
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use tar::{Archive, Builder, EntryType, Header};
+use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use crate::{
@@ -62,6 +63,17 @@ pub fn operation_resource_names(operation_id: Uuid) -> OperationResourceNames {
     }
 }
 
+fn operation_resource_labels(operation_id: Uuid, role: &str) -> HashMap<String, String> {
+    HashMap::from([
+        ("io.audiodown.managed".to_string(), "true".to_string()),
+        ("io.audiodown.resource-role".to_string(), role.to_string()),
+        (
+            "io.audiodown.operation-id".to_string(),
+            operation_id.to_string(),
+        ),
+    ])
+}
+
 pub fn builder_container_config(
     operation_id: Uuid,
     allow_lifecycle_scripts: bool,
@@ -81,6 +93,7 @@ pub fn builder_container_config(
         working_dir: Some("/workspace".to_string()),
         env: Some(env),
         entrypoint: Some(policy.command),
+        labels: Some(operation_resource_labels(operation_id, "plugin-build")),
         network_disabled: Some(false),
         host_config: Some(host_config),
         ..Default::default()
@@ -95,6 +108,10 @@ pub fn proxy_container_config(operation_id: Uuid) -> ContainerCreateBody {
         image: Some(SUPERVISOR_IMAGE.to_string()),
         user: Some(policy.user),
         entrypoint: Some(policy.command),
+        labels: Some(operation_resource_labels(
+            operation_id,
+            "plugin-build-proxy",
+        )),
         network_disabled: Some(false),
         host_config: Some(host_config),
         networking_config: Some(NetworkingConfig {
@@ -306,6 +323,39 @@ pub fn normalize_output_archive(input: &[u8]) -> Result<Vec<u8>, DockerBuildErro
     Ok(normalized)
 }
 
+pub fn complete_tar_length(bytes: &[u8]) -> Option<usize> {
+    const BLOCK: usize = 512;
+
+    let mut offset = 0_usize;
+    loop {
+        let header_end = offset.checked_add(BLOCK)?;
+        let header = bytes.get(offset..header_end)?;
+        if header.iter().all(|byte| *byte == 0) {
+            let terminator_end = header_end.checked_add(BLOCK)?;
+            let second = bytes.get(header_end..terminator_end)?;
+            return second
+                .iter()
+                .all(|byte| *byte == 0)
+                .then_some(terminator_end);
+        }
+
+        let size_field = header.get(124..136)?;
+        let size_text = std::str::from_utf8(size_field)
+            .ok()?
+            .trim_matches(['\0', ' ']);
+        let size = if size_text.is_empty() {
+            0_usize
+        } else {
+            usize::from_str_radix(size_text, 8).ok()?
+        };
+        let padded_size = size
+            .checked_add(BLOCK - 1)?
+            .checked_div(BLOCK)?
+            .checked_mul(BLOCK)?;
+        offset = header_end.checked_add(padded_size)?;
+    }
+}
+
 fn strip_output_prefix(path: &Path) -> Result<PathBuf, DockerBuildError> {
     let mut components = path.components();
     match components.next() {
@@ -332,6 +382,8 @@ pub struct TrustedImageInputs {
     pub pinned_base_reference: String,
     pub base_image_digest: String,
     pub sdk_hash: String,
+    pub builder_asset_hash: String,
+    pub runtime_asset_hash: String,
     pub builder_context: Vec<u8>,
     pub runtime_context: Vec<u8>,
 }
@@ -353,10 +405,14 @@ pub fn trusted_image_inputs() -> Result<TrustedImageInputs, DockerBuildError> {
         ),
     ])?;
     let runtime_context = runtime_context(&sdk_files)?;
+    let builder_asset_hash = hash_bytes(&builder_context);
+    let runtime_asset_hash = hash_bytes(&runtime_context);
     Ok(TrustedImageInputs {
         pinned_base_reference,
         base_image_digest: lock.digest,
         sdk_hash,
+        builder_asset_hash,
+        runtime_asset_hash,
         builder_context,
         runtime_context,
     })
@@ -414,6 +470,10 @@ fn hash_embedded_files(files: &[(&str, &[u8])]) -> String {
         hasher.update(contents);
     }
     format!("{:x}", hasher.finalize())
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn embedded_sdk_files() -> Vec<(&'static str, &'static [u8])> {
@@ -644,18 +704,6 @@ impl DockerBuildAdapter {
             .await
             .map_err(|_| BuildAdapterError::new("BUILDER_CREATE_FAILED"))?;
         self.docker
-            .upload_to_container(
-                &builder.id,
-                Some(
-                    UploadToContainerOptionsBuilder::new()
-                        .path("/workspace")
-                        .build(),
-                ),
-                bollard::body_full(source.into()),
-            )
-            .await
-            .map_err(|_| BuildAdapterError::new("BUILD_INPUT_UPLOAD_FAILED"))?;
-        self.docker
             .start_container(
                 &proxy.id,
                 None::<bollard::query_parameters::StartContainerOptions>,
@@ -669,6 +717,7 @@ impl DockerBuildAdapter {
             )
             .await
             .map_err(|_| BuildAdapterError::new("BUILDER_START_FAILED"))?;
+        self.upload_source(&builder.id, &source).await?;
 
         let status_result = self.wait_for_build_status(&builder.id).await;
         let build_logs = self.collect_build_logs(&builder.id).await?;
@@ -762,6 +811,69 @@ impl DockerBuildAdapter {
         })
     }
 
+    async fn upload_source(
+        &self,
+        builder_id: &str,
+        source: &[u8],
+    ) -> Result<(), BuildAdapterError> {
+        let exec = self
+            .docker
+            .create_exec(
+                builder_id,
+                ExecConfig {
+                    attach_stdin: Some(true),
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    cmd: Some(vec![
+                        "sh".to_string(),
+                        "-c".to_string(),
+                        concat!(
+                            "head -c \"$1\" > /workspace/source.tar",
+                            " && tar -xf /workspace/source.tar -C /workspace",
+                            " && rm -f /workspace/source.tar"
+                        )
+                        .to_string(),
+                        "audiodown-upload".to_string(),
+                        source.len().to_string(),
+                    ]),
+                    user: Some("10001:10001".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|_| BuildAdapterError::new("BUILD_INPUT_UPLOAD_FAILED"))?;
+        let StartExecResults::Attached { output, mut input } = self
+            .docker
+            .start_exec(&exec.id, None)
+            .await
+            .map_err(|_| BuildAdapterError::new("BUILD_INPUT_UPLOAD_FAILED"))?
+        else {
+            return Err(BuildAdapterError::new("BUILD_INPUT_UPLOAD_FAILED"));
+        };
+        input
+            .write_all(source)
+            .await
+            .map_err(|_| BuildAdapterError::new("BUILD_INPUT_UPLOAD_FAILED"))?;
+        drop(input);
+        drop(output);
+        for _ in 0..100 {
+            let inspected = self
+                .docker
+                .inspect_exec(&exec.id)
+                .await
+                .map_err(|_| BuildAdapterError::new("BUILD_INPUT_UPLOAD_FAILED"))?;
+            if inspected.running == Some(false) {
+                return if inspected.exit_code == Some(0) {
+                    Ok(())
+                } else {
+                    Err(BuildAdapterError::new("BUILD_INPUT_UPLOAD_FAILED"))
+                };
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        Err(BuildAdapterError::new("BUILD_INPUT_UPLOAD_FAILED"))
+    }
+
     async fn ensure_trusted_images(
         &self,
         trusted: &TrustedImageInputs,
@@ -778,8 +890,16 @@ impl DockerBuildAdapter {
                 trusted.runtime_context.as_slice(),
             ),
         ] {
-            let expected =
-                trusted_image_labels(kind, &trusted.base_image_digest, &trusted.sdk_hash);
+            let asset_hash = match kind {
+                TrustedImageKind::Builder => &trusted.builder_asset_hash,
+                TrustedImageKind::Runtime => &trusted.runtime_asset_hash,
+            };
+            let expected = trusted_image_labels(
+                kind,
+                &trusted.base_image_digest,
+                &trusted.sdk_hash,
+                asset_hash,
+            );
             let valid = match self.docker.inspect_image(image).await {
                 Ok(inspect) => {
                     inspect
@@ -790,6 +910,7 @@ impl DockerBuildAdapter {
                                 kind,
                                 &trusted.base_image_digest,
                                 &trusted.sdk_hash,
+                                asset_hash,
                                 &labels,
                             )
                             .is_ok()
@@ -844,6 +965,7 @@ impl DockerBuildAdapter {
                 kind,
                 &trusted.base_image_digest,
                 &trusted.sdk_hash,
+                asset_hash,
                 &labels,
             )
             .map_err(|_| BuildAdapterError::new("TRUSTED_IMAGE_ATTESTATION_FAILED"))?;
@@ -894,44 +1016,147 @@ impl DockerBuildAdapter {
         &self,
         builder_id: &str,
     ) -> Result<BuildStatus, DockerBuildError> {
+        let exec = self
+            .docker
+            .create_exec(
+                builder_id,
+                ExecConfig {
+                    attach_stdout: Some(false),
+                    attach_stderr: Some(false),
+                    cmd: Some(vec![
+                        "sh".to_string(),
+                        "-c".to_string(),
+                        concat!(
+                            "attempt=0;",
+                            " while [ \"$attempt\" -lt 3000 ]; do",
+                            " test -f /workspace/status.json && exit 0;",
+                            " attempt=$((attempt + 1)); sleep 0.1;",
+                            " done;",
+                            " exit 1"
+                        )
+                        .to_string(),
+                    ]),
+                    user: Some("10001:10001".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|_| DockerBuildError::ArchiveIo)?;
+        let StartExecResults::Detached = self
+            .docker
+            .start_exec(
+                &exec.id,
+                Some(StartExecOptions {
+                    detach: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .map_err(|_| DockerBuildError::ArchiveIo)?
+        else {
+            return Err(DockerBuildError::ArchiveIo);
+        };
         let wait = async {
             loop {
-                let mut bytes = Vec::new();
-                let mut stream = self.docker.download_from_container(
-                    builder_id,
-                    Some(
-                        DownloadFromContainerOptionsBuilder::new()
-                            .path("/workspace/status.json")
-                            .build(),
-                    ),
-                );
-                let mut available = true;
-                while let Some(chunk) = stream.next().await {
-                    match chunk {
-                        Ok(chunk) => bytes.extend_from_slice(&chunk),
-                        Err(_) => {
-                            available = false;
-                            break;
-                        }
-                    }
-                }
-                if available && !bytes.is_empty() {
-                    let mut archive = Archive::new(Cursor::new(bytes));
-                    let mut entries = archive.entries().map_err(|_| DockerBuildError::ArchiveIo)?;
-                    if let Some(entry) = entries.next() {
-                        let mut entry = entry.map_err(|_| DockerBuildError::ArchiveIo)?;
-                        let mut json = Vec::new();
-                        entry
-                            .read_to_end(&mut json)
-                            .map_err(|_| DockerBuildError::ArchiveIo)?;
-                        return serde_json::from_slice(&json)
-                            .map_err(|_| DockerBuildError::ArchiveIo);
-                    }
+                let inspected = self
+                    .docker
+                    .inspect_exec(&exec.id)
+                    .await
+                    .map_err(|_| DockerBuildError::ArchiveIo)?;
+                if inspected.running == Some(false) {
+                    return if inspected.exit_code == Some(0) {
+                        Ok(())
+                    } else {
+                        Err(DockerBuildError::BuildTimeout)
+                    };
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
         };
         tokio::time::timeout(std::time::Duration::from_secs(5 * 60), wait)
+            .await
+            .map_err(|_| DockerBuildError::BuildTimeout)??;
+
+        let read_status = async {
+            let bytes = self
+                .download_exec_archive(builder_id, "status.json", 1024 * 1024)
+                .await?;
+            let mut archive = Archive::new(Cursor::new(bytes));
+            let mut entries = archive.entries().map_err(|_| DockerBuildError::ArchiveIo)?;
+            let mut entry = entries
+                .next()
+                .ok_or(DockerBuildError::ArchiveIo)?
+                .map_err(|_| DockerBuildError::ArchiveIo)?;
+            let mut json = Vec::new();
+            entry
+                .read_to_end(&mut json)
+                .map_err(|_| DockerBuildError::ArchiveIo)?;
+            serde_json::from_slice(&json).map_err(|_| DockerBuildError::ArchiveIo)
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), read_status)
+            .await
+            .map_err(|_| DockerBuildError::BuildTimeout)?
+    }
+
+    async fn download_exec_archive(
+        &self,
+        container_id: &str,
+        entry: &str,
+        limit: usize,
+    ) -> Result<Vec<u8>, DockerBuildError> {
+        let exec = self
+            .docker
+            .create_exec(
+                container_id,
+                ExecConfig {
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    cmd: Some(vec![
+                        "tar".to_string(),
+                        "-cf".to_string(),
+                        "-".to_string(),
+                        "-C".to_string(),
+                        "/workspace".to_string(),
+                        entry.to_string(),
+                    ]),
+                    user: Some("10001:10001".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|_| DockerBuildError::ArchiveIo)?;
+        let StartExecResults::Attached { mut output, input } = self
+            .docker
+            .start_exec(&exec.id, None)
+            .await
+            .map_err(|_| DockerBuildError::ArchiveIo)?
+        else {
+            return Err(DockerBuildError::ArchiveIo);
+        };
+        drop(input);
+
+        let read = async {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = output.next().await {
+                let chunk = chunk.map_err(|_| DockerBuildError::ArchiveIo)?;
+                let data = match chunk {
+                    LogOutput::StdOut { message } | LogOutput::Console { message } => message,
+                    LogOutput::StdErr { .. } | LogOutput::StdIn { .. } => {
+                        return Err(DockerBuildError::ArchiveIo);
+                    }
+                };
+                if bytes.len().saturating_add(data.len()) > limit {
+                    return Err(DockerBuildError::BuildOutputLimitExceeded);
+                }
+                bytes.extend_from_slice(&data);
+                if let Some(complete) = complete_tar_length(&bytes) {
+                    bytes.truncate(complete);
+                    return Ok(bytes);
+                }
+            }
+            Err(DockerBuildError::ArchiveIo)
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(60), read)
             .await
             .map_err(|_| DockerBuildError::BuildTimeout)?
     }
@@ -993,26 +1218,13 @@ impl DockerBuildAdapter {
     }
 
     async fn download_output(&self, builder_id: &str) -> Result<Vec<u8>, BuildAdapterError> {
-        let mut output = Vec::new();
-        let mut stream = self.docker.download_from_container(
+        self.download_exec_archive(
             builder_id,
-            Some(
-                DownloadFromContainerOptionsBuilder::new()
-                    .path("/workspace/output")
-                    .build(),
-            ),
-        );
-        while let Some(chunk) = stream.next().await {
-            let chunk =
-                chunk.map_err(|_| BuildAdapterError::new("BUILD_OUTPUT_DOWNLOAD_FAILED"))?;
-            if output.len().saturating_add(chunk.len())
-                > BUILD_OUTPUT_LIMIT_BYTES as usize + 1024 * 1024
-            {
-                return Err(BuildAdapterError::new("BUILD_OUTPUT_LIMIT_EXCEEDED"));
-            }
-            output.extend_from_slice(&chunk);
-        }
-        Ok(output)
+            "output",
+            BUILD_OUTPUT_LIMIT_BYTES as usize + 1024 * 1024,
+        )
+        .await
+        .map_err(|error| BuildAdapterError::new(error.code()))
     }
 
     async fn verify_managed_image(

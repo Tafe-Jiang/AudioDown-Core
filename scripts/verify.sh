@@ -4,7 +4,10 @@ set -eu
 root_dir="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 cd "$root_dir"
 
-plugin_id="com.audiodown.virtual.content"
+plugin_ids="
+com.audiodown.virtual.content
+com.audiodown.virtual.build-risk
+"
 verify_id="audiodown-verify-$$"
 rust_registry_volume="$verify_id-registry"
 rust_target_volume="$verify_id-target"
@@ -12,9 +15,20 @@ AUDIODOWN_HOST_DATA_DIR="$(mktemp -d /tmp/audiodown-verify-data.XXXXXX)"
 export AUDIODOWN_HOST_DATA_DIR
 
 cleanup() {
+  for plugin_id in $plugin_ids; do
+    docker ps -aq \
+      --filter "label=io.audiodown.managed=true" \
+      --filter "label=io.audiodown.plugin-id=$plugin_id" \
+      | xargs -r docker rm -f >/dev/null 2>&1 || true
+    docker images -q \
+      --filter "label=io.audiodown.plugin-id=$plugin_id" \
+      | xargs -r docker image rm -f >/dev/null 2>&1 || true
+  done
   docker ps -aq \
-    --filter "label=io.audiodown.managed=true" \
-    --filter "label=io.audiodown.plugin-id=$plugin_id" \
+    --filter "label=io.audiodown.resource-role=plugin-build" \
+    | xargs -r docker rm -f >/dev/null 2>&1 || true
+  docker ps -aq \
+    --filter "label=io.audiodown.resource-role=plugin-build-proxy" \
     | xargs -r docker rm -f >/dev/null 2>&1 || true
   docker compose exec -T audiodown \
     chown -R "$(id -u):$(id -g)" /data >/dev/null 2>&1 || true
@@ -80,6 +94,13 @@ printf '%s\n' "Building Vue production assets"
   npm run build
 )
 
+printf '%s\n' "Running MCP UI Playwright accessibility, responsive, and visual tests"
+docker run --rm --ipc=host \
+  -v "$root_dir/web:/app" \
+  -w /app \
+  mcr.microsoft.com/playwright:v1.61.1-noble \
+  sh -lc 'npm ci && npx playwright test'
+
 printf '%s\n' "Validating Compose configuration"
 docker compose config --quiet
 
@@ -92,4 +113,10 @@ printf '%s\n' "Running virtual plugin smoke test"
 printf '%s\n' "Running security boundary checks"
 ./tests/security-boundary.sh
 
-printf '%s\n' "AudioDown foundation verification passed"
+printf '%s\n' "Running repository installation smoke including tests/plugin-installation-live.spec.ts"
+./tests/plugin-repository-smoke.sh
+
+printf '%s\n' "Running plugin installation security checks"
+./tests/plugin-installation-security.sh
+
+printf '%s\n' "AudioDown phase-two verification passed"

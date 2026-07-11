@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, fs};
 use audiodown_supervisor::{
     docker_build::{
         assembler_container_config, build_source_archive, builder_container_config,
-        managed_image_plan, normalize_output_archive, operation_resource_names,
-        proxy_container_config, trusted_image_inputs, ManagedImageInput,
+        complete_tar_length, managed_image_plan, normalize_output_archive,
+        operation_resource_names, proxy_container_config, trusted_image_inputs, ManagedImageInput,
     },
     trusted_images,
 };
@@ -35,6 +35,18 @@ fn operation_resources_and_container_requests_are_fully_derived() {
     assert_eq!(
         builder.image.as_deref(),
         Some(trusted_images::BUILDER_IMAGE)
+    );
+    assert_eq!(
+        builder.labels.as_ref().unwrap()["io.audiodown.managed"],
+        "true"
+    );
+    assert_eq!(
+        builder.labels.as_ref().unwrap()["io.audiodown.resource-role"],
+        "plugin-build"
+    );
+    assert_eq!(
+        builder.labels.as_ref().unwrap()["io.audiodown.operation-id"],
+        OPERATION_ID
     );
     assert_eq!(builder.user.as_deref(), Some("10001:10001"));
     assert_eq!(
@@ -69,6 +81,18 @@ fn operation_resources_and_container_requests_are_fully_derived() {
     );
 
     let proxy = proxy_container_config(operation_id);
+    assert_eq!(
+        proxy.labels.as_ref().unwrap()["io.audiodown.managed"],
+        "true"
+    );
+    assert_eq!(
+        proxy.labels.as_ref().unwrap()["io.audiodown.resource-role"],
+        "plugin-build-proxy"
+    );
+    assert_eq!(
+        proxy.labels.as_ref().unwrap()["io.audiodown.operation-id"],
+        OPERATION_ID
+    );
     let proxy_host = proxy.host_config.unwrap();
     assert_eq!(
         proxy_host.network_mode,
@@ -185,6 +209,17 @@ fn downloaded_output_rejects_traversal_hardlinks_and_duplicates() {
 }
 
 #[test]
+fn streamed_docker_archives_stop_only_at_a_structural_tar_terminator() {
+    let archive = make_tar(vec![
+        TarFixture::file("output/zeros.bin", &vec![0; 1024], 0o644, 0, 0),
+        TarFixture::file("output/index.js", b"module.exports = 1;\n", 0o644, 0, 0),
+    ]);
+    let complete = complete_tar_length(&archive).unwrap();
+    assert!(complete <= archive.len());
+    assert_eq!(complete_tar_length(&archive[..complete - 1]), None);
+}
+
+#[test]
 fn trusted_inputs_and_managed_image_commit_are_deterministic() {
     let trusted = trusted_image_inputs().unwrap();
     assert!(trusted
@@ -192,6 +227,9 @@ fn trusted_inputs_and_managed_image_commit_are_deterministic() {
         .starts_with("node:22-bookworm-slim@sha256:"));
     assert_eq!(trusted.base_image_digest.len(), 71);
     assert_eq!(trusted.sdk_hash.len(), 64);
+    assert_eq!(trusted.builder_asset_hash.len(), 64);
+    assert_eq!(trusted.runtime_asset_hash.len(), 64);
+    assert_ne!(trusted.builder_asset_hash, trusted.runtime_asset_hash);
     assert!(String::from_utf8_lossy(&trusted.builder_context).contains("node22-build-runner.js"));
     assert!(
         String::from_utf8_lossy(&trusted.runtime_context).contains("plugin-sdk/node/src/index.js")

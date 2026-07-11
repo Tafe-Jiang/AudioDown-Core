@@ -15,6 +15,7 @@ const allowLifecycleScripts =
   process.env.AUDIODOWN_ALLOW_LIFECYCLE_SCRIPTS === "true";
 const npmArgs = ["ci", "--omit=dev"];
 const maxLogBytes = 1024 * 1024;
+const inputWaitAttempts = 300;
 
 if (!allowLifecycleScripts) {
   npmArgs.push("--ignore-scripts");
@@ -29,10 +30,18 @@ function writeStatus(status) {
   );
 }
 
-async function run() {
-  if (!existsSync(`${input}/.input-ready`)) {
-    throw new Error("INPUT_NOT_READY");
+async function waitForInput() {
+  for (let attempt = 0; attempt < inputWaitAttempts; attempt += 1) {
+    if (existsSync(`${input}/.input-ready`)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  throw new Error("INPUT_NOT_READY");
+}
+
+async function run() {
+  await waitForInput();
   rmSync(output, { recursive: true, force: true });
   cpSync(input, output, { recursive: true, dereference: false });
   rmSync(`${output}/.input-ready`, { force: true });

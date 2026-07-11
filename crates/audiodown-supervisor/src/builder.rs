@@ -155,7 +155,7 @@ pub fn assembler_policy() -> ContainerPolicy {
         command: Vec::new(),
         cap_drop: vec!["ALL".to_string()],
         security_opt: vec!["no-new-privileges:true".to_string()],
-        read_only_rootfs: true,
+        read_only_rootfs: false,
         tmpfs: HashMap::new(),
         bind_mounts: Vec::new(),
         devices: Vec::new(),

@@ -20,3 +20,10 @@ it("provides Vue primitives without React dependencies", () => {
   expect(mount(Empty).exists()).toBe(true);
   expect(mount(Table).element.tagName).toBe("TABLE");
 });
+
+it("does not animate disabled opacity through low-contrast frames", () => {
+  const button = mount(Button, { slots: { default: "搜索" } });
+
+  expect(button.classes()).toContain("transition-colors");
+  expect(button.classes()).not.toContain("transition-all");
+});

@@ -1,0 +1,13 @@
+{
+  "name": "audiodown-virtual-build-risk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node --check src/index.js",
+    "preinstall": "node -e \"setTimeout(() => require('node:fs').writeFileSync('build-risk-marker.txt', 'approved\\n'), 5000)\""
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

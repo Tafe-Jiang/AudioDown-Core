@@ -28,6 +28,7 @@ const COMMIT_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 const SOURCE_HASH: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const MANIFEST_HASH: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 const SDK_HASH: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+const ASSET_HASH: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
 #[test]
 fn node_base_is_locked_to_an_exact_digest_and_verified_after_pull() {
@@ -58,18 +59,36 @@ fn trusted_images_have_fixed_names_and_attested_labels() {
     assert_eq!(RUNTIME_IMAGE, "audiodown/plugin-runtime-node22:1.0");
 
     for kind in [TrustedImageKind::Builder, TrustedImageKind::Runtime] {
-        let labels = trusted_image_labels(kind, &lock.digest, SDK_HASH);
+        let labels = trusted_image_labels(kind, &lock.digest, SDK_HASH, ASSET_HASH);
         assert_eq!(labels["io.audiodown.base-image-digest"], lock.digest);
         assert_eq!(labels["io.audiodown.sdk-hash"], SDK_HASH);
+        assert_eq!(labels["io.audiodown.asset-hash"], ASSET_HASH);
         assert_eq!(labels["io.audiodown.build-policy-version"], POLICY_VERSION);
-        verify_trusted_image_labels(kind, &lock.digest, SDK_HASH, &labels).unwrap();
+        verify_trusted_image_labels(kind, &lock.digest, SDK_HASH, ASSET_HASH, &labels).unwrap();
 
         let mut tampered = labels.clone();
         tampered.insert(
             "io.audiodown.base-image-digest".into(),
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
         );
-        assert!(verify_trusted_image_labels(kind, &lock.digest, SDK_HASH, &tampered).is_err());
+        assert!(
+            verify_trusted_image_labels(kind, &lock.digest, SDK_HASH, ASSET_HASH, &tampered)
+                .is_err()
+        );
+
+        let mut stale_assets = labels.clone();
+        stale_assets.insert(
+            "io.audiodown.asset-hash".into(),
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".into(),
+        );
+        assert!(verify_trusted_image_labels(
+            kind,
+            &lock.digest,
+            SDK_HASH,
+            ASSET_HASH,
+            &stale_assets
+        )
+        .is_err());
     }
 }
 
@@ -213,6 +232,7 @@ fn assembler_is_never_started_and_has_network_disabled() {
     assert_eq!(assembler.image, RUNTIME_IMAGE);
     assert!(assembler.network_disabled);
     assert!(!assembler.start_container);
+    assert!(!assembler.read_only_rootfs);
     assert!(assembler.bind_mounts.is_empty());
 }
 

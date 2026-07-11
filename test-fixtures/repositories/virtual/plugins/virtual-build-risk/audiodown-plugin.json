@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1.0",
+  "id": "com.audiodown.virtual.build-risk",
+  "name": "Virtual Build Risk",
+  "version": "1.0.0",
+  "type": "content",
+  "runtime": {
+    "type": "nodejs",
+    "version": "22",
+    "entry": "src/index.js"
+  },
+  "compatibility": {
+    "pluginApi": ">=1.0 <2.0",
+    "core": ">=1.0 <2.0"
+  },
+  "platform": {
+    "id": "virtual-risk",
+    "name": "Virtual Risk"
+  },
+  "capabilities": [
+    "system.health"
+  ],
+  "network": {
+    "allowedHosts": []
+  },
+  "build": {
+    "npmLifecycleScripts": {
+      "required": true,
+      "reason": "Write a deterministic test marker after a five-second delay"
+    }
+  }
+}

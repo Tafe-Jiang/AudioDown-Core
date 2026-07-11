@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "1.0",
+  "id": "com.audiodown.virtual.content",
+  "name": "Virtual Content",
+  "version": "1.0.0",
+  "type": "content",
+  "runtime": {
+    "type": "nodejs",
+    "version": "22",
+    "entry": "src/index.js"
+  },
+  "compatibility": {
+    "pluginApi": ">=1.0 <2.0",
+    "core": ">=1.0 <2.0"
+  },
+  "platform": {
+    "id": "virtual",
+    "name": "Virtual"
+  },
+  "capabilities": [
+    "system.health"
+  ],
+  "network": {
+    "allowedHosts": []
+  },
+  "build": {
+    "npmLifecycleScripts": {
+      "required": false
+    }
+  }
+}
