@@ -2,11 +2,13 @@
 
 mod log_repository;
 mod plugin_repository;
+mod risk_grant_repository;
 
 use std::{str::FromStr, time::Duration};
 
 pub use log_repository::{LogFilter, LogRepository};
 pub use plugin_repository::{PluginRecord, PluginRepository};
+pub use risk_grant_repository::{RiskGrantRecord, RiskGrantRepository};
 use sqlx::{
     migrate::MigrateError,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
@@ -51,6 +53,10 @@ impl Storage {
     pub fn logs(&self) -> LogRepository<'_> {
         LogRepository::new(&self.pool)
     }
+
+    pub fn risk_grants(&self) -> RiskGrantRepository<'_> {
+        RiskGrantRepository::new(&self.pool)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -61,4 +67,6 @@ pub enum StorageError {
     Migration(#[from] MigrateError),
     #[error("invalid stored data: {0}")]
     InvalidData(String),
+    #[error("record not found")]
+    NotFound,
 }
