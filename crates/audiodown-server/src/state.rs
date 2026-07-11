@@ -12,6 +12,7 @@ pub struct AppState {
     pub storage: Storage,
     pub core_version: Version,
     pub supervisor: Arc<dyn SupervisorClient>,
+    pub development: DevelopmentConfig,
 }
 
 impl AppState {
@@ -24,6 +25,18 @@ impl AppState {
             storage,
             core_version,
             supervisor,
+            development: DevelopmentConfig::default(),
         }
     }
+
+    pub fn with_development(mut self, enabled: bool, token: Option<String>) -> Self {
+        self.development = DevelopmentConfig { enabled, token };
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DevelopmentConfig {
+    pub enabled: bool,
+    pub token: Option<String>,
 }

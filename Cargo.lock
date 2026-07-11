@@ -101,6 +101,7 @@ dependencies = [
  "async-trait",
  "audiodown-domain",
  "audiodown-logging",
+ "audiodown-plugin-api",
  "audiodown-storage",
  "axum",
  "chrono",
@@ -138,8 +139,10 @@ version = "1.0.0-alpha.1"
 dependencies = [
  "anyhow",
  "audiodown-domain",
+ "audiodown-plugin-api",
  "bollard",
  "chrono",
+ "futures-util",
  "serde",
  "serde_json",
  "sha2 0.10.9",

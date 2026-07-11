@@ -63,11 +63,6 @@ impl PluginContainerPolicy {
             "io.audiodown.plugin-id".to_string(),
             installed.plugin_id.as_str().to_string(),
         );
-        let rpc_mount = format!(
-            "/run/audiodown/plugins/{}:/run/audiodown:rw",
-            installed.plugin_id
-        );
-
         Ok(PluginContainerSpec {
             plugin_id: installed.plugin_id,
             image_id: installed.image_id,
@@ -76,7 +71,7 @@ impl PluginContainerPolicy {
             labels,
             read_only: true,
             tmpfs: vec!["/tmp:rw,noexec,nosuid,nodev,size=67108864".to_string()],
-            mounts: vec![rpc_mount],
+            mounts: Vec::new(),
             public_ports: Vec::new(),
             privileged: false,
             cap_add: Vec::new(),

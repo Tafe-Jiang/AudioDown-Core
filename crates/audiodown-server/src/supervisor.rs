@@ -44,6 +44,18 @@ pub struct SupervisorHealth {
 pub struct PluginRuntimeState {
     pub plugin_id: PluginId,
     pub status: PluginStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub logs: Vec<PluginRuntimeLog>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginRuntimeLog {
+    pub level: String,
+    pub message: String,
+    #[serde(default)]
+    pub context: serde_json::Value,
 }
 
 #[derive(Debug, Error)]
@@ -127,8 +139,8 @@ impl UnixSupervisorClient {
             .map_err(|_| SupervisorError::Unavailable)?;
 
         let response_bytes = read_response(&mut stream, self.max_response_bytes).await?;
-        let response: WireResponse =
-            serde_json::from_slice(&response_bytes).map_err(|_| SupervisorError::InvalidResponse)?;
+        let response: WireResponse = serde_json::from_slice(&response_bytes)
+            .map_err(|_| SupervisorError::InvalidResponse)?;
         if !response.ok {
             let code = response
                 .error

@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use audiodown_domain::plugin::PluginStatus;
 use chrono::Utc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -14,6 +15,7 @@ use tokio::{
 use crate::{
     config::{Config, SupervisorIdentity},
     docker::DockerAdapter,
+    install_record,
     protocol::{SupervisorMethod, SupervisorRequest, SupervisorResponse},
 };
 
@@ -30,14 +32,18 @@ pub async fn run(
     let listener = UnixListener::bind(&config.socket_path)?;
     set_socket_permissions(&config.socket_path).await?;
     let authenticator = std::sync::Arc::new(Authenticator::new(identity.token));
-    let docker = std::sync::Arc::new(docker);
+    let runtime = std::sync::Arc::new(Runtime {
+        docker,
+        plugin_data: config.plugin_data,
+        installation_id: identity.installation_id,
+    });
 
     loop {
         let (stream, _) = listener.accept().await?;
         let authenticator = authenticator.clone();
-        let docker = docker.clone();
+        let runtime = runtime.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle_connection(stream, authenticator, docker).await {
+            if let Err(error) = handle_connection(stream, authenticator, runtime).await {
                 tracing::warn!(error = %error, "Supervisor request failed");
             }
         });
@@ -47,7 +53,7 @@ pub async fn run(
 async fn handle_connection(
     mut stream: UnixStream,
     authenticator: std::sync::Arc<Authenticator>,
-    docker: std::sync::Arc<DockerAdapter>,
+    runtime: std::sync::Arc<Runtime>,
 ) -> anyhow::Result<()> {
     let bytes = read_request(&mut stream).await?;
     let request = match serde_json::from_slice::<SupervisorRequest>(&bytes) {
@@ -67,16 +73,12 @@ async fn handle_connection(
     };
 
     let response = match request.validate_shape() {
-        Err(error) => SupervisorResponse::failure(
-            request.id,
-            "INVALID_REQUEST",
-            error.to_string(),
-        ),
+        Err(error) => SupervisorResponse::failure(request.id, "INVALID_REQUEST", error.to_string()),
         Ok(()) => match authenticator.validate(&request) {
             Err(error) => {
                 SupervisorResponse::failure(request.id, "UNAUTHORIZED", error.to_string())
             }
-            Ok(()) => dispatch(request, docker).await,
+            Ok(()) => dispatch(request, runtime).await,
         },
     };
     write_response(&mut stream, &response).await?;
@@ -85,7 +87,7 @@ async fn handle_connection(
 
 async fn dispatch(
     request: SupervisorRequest,
-    docker: std::sync::Arc<DockerAdapter>,
+    runtime: std::sync::Arc<Runtime>,
 ) -> SupervisorResponse {
     match request.method {
         SupervisorMethod::SystemPing => SupervisorResponse::success(
@@ -93,30 +95,110 @@ async fn dispatch(
             serde_json::json!({"ok": true, "service": "audiodown-supervisor"}),
         ),
         SupervisorMethod::PluginInspect => {
-            let plugin_id = request.params.expect("validated request has params").plugin_id;
-            match docker.find_managed_container(&plugin_id).await {
+            let plugin_id = request
+                .params
+                .expect("validated request has params")
+                .plugin_id;
+            match runtime.docker.inspect_plugin(&plugin_id).await {
+                Ok(inspection) => SupervisorResponse::success(
+                    request.id,
+                    serde_json::json!({
+                        "pluginId": plugin_id,
+                        "status": if inspection.running {
+                            PluginStatus::Healthy
+                        } else {
+                            PluginStatus::Stopped
+                        },
+                        "containerId": inspection.container_id
+                    }),
+                ),
+                Err(error) => docker_failure(request.id, error),
+            }
+        }
+        SupervisorMethod::PluginStart => {
+            let plugin_id = request
+                .params
+                .expect("validated request has params")
+                .plugin_id;
+            let install = match install_record::load(
+                &runtime.plugin_data,
+                &runtime.installation_id,
+                &plugin_id,
+            )
+            .await
+            {
+                Ok(install) => install,
+                Err(error) => {
+                    return SupervisorResponse::failure(
+                        request.id,
+                        "INVALID_INSTALL_RECORD",
+                        error.to_string(),
+                    )
+                }
+            };
+            match runtime.docker.start_plugin(install).await {
+                Ok(started) => SupervisorResponse::success(
+                    request.id,
+                    serde_json::json!({
+                        "pluginId": plugin_id,
+                        "status": PluginStatus::Healthy,
+                        "containerId": started.container_id,
+                        "logs": started.logs
+                    }),
+                ),
+                Err(crate::docker::DockerAdapterError::Handshake(error)) => {
+                    SupervisorResponse::failure(request.id, "PLUGIN_NOT_COMPATIBLE", error)
+                }
+                Err(error) => docker_failure(request.id, error),
+            }
+        }
+        SupervisorMethod::PluginStop => {
+            let plugin_id = request
+                .params
+                .expect("validated request has params")
+                .plugin_id;
+            match runtime.docker.stop_plugin(&plugin_id).await {
                 Ok(container_id) => SupervisorResponse::success(
                     request.id,
                     serde_json::json!({
                         "pluginId": plugin_id,
-                        "running": container_id.is_some()
+                        "status": PluginStatus::Stopped,
+                        "containerId": container_id
                     }),
                 ),
-                Err(error) => SupervisorResponse::failure(
-                    request.id,
-                    "DOCKER_OPERATION_FAILED",
-                    error.to_string(),
-                ),
+                Err(error) => docker_failure(request.id, error),
             }
         }
-        SupervisorMethod::PluginStart
-        | SupervisorMethod::PluginStop
-        | SupervisorMethod::PluginLogs => SupervisorResponse::failure(
-            request.id,
-            "OPERATION_NOT_READY",
-            "Plugin lifecycle requires an installed plugin record",
-        ),
+        SupervisorMethod::PluginLogs => {
+            let plugin_id = request
+                .params
+                .expect("validated request has params")
+                .plugin_id;
+            match runtime.docker.plugin_logs(&plugin_id).await {
+                Ok(logs) => SupervisorResponse::success(
+                    request.id,
+                    serde_json::json!({
+                        "pluginId": plugin_id,
+                        "logs": logs
+                    }),
+                ),
+                Err(error) => docker_failure(request.id, error),
+            }
+        }
     }
+}
+
+fn docker_failure(
+    request_id: String,
+    error: crate::docker::DockerAdapterError,
+) -> SupervisorResponse {
+    SupervisorResponse::failure(request_id, "DOCKER_OPERATION_FAILED", error.to_string())
+}
+
+struct Runtime {
+    docker: DockerAdapter,
+    plugin_data: std::path::PathBuf,
+    installation_id: String,
 }
 
 async fn read_request(stream: &mut UnixStream) -> anyhow::Result<Vec<u8>> {

@@ -13,13 +13,12 @@ pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         .route("/system", get(system::system))
         .route("/plugins", get(plugins::list))
+        .route("/plugins/{plugin_id}/start", post(plugins::start))
+        .route("/plugins/{plugin_id}/stop", post(plugins::stop))
+        .route("/plugins/{plugin_id}/runtime", get(plugins::runtime))
         .route(
-            "/plugins/{plugin_id}/start",
-            post(plugins::start),
-        )
-        .route(
-            "/plugins/{plugin_id}/stop",
-            post(plugins::stop),
+            "/dev/plugins/register-fixture",
+            post(plugins::register_fixture),
         )
         .route("/logs", get(logs::list))
         .route("/discover", get(plugins::discover))

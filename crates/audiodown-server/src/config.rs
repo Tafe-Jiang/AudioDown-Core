@@ -12,14 +12,16 @@ pub struct Config {
     pub supervisor_socket: PathBuf,
     pub core_token_file: PathBuf,
     pub log_filter: String,
+    pub dev_mode: bool,
+    pub dev_token: Option<String>,
 }
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let bind = env_value("AUDIODOWN_BIND", "0.0.0.0:18080").parse()?;
         let data_dir = PathBuf::from(env_value("AUDIODOWN_DATA_DIR", "/data"));
-        let database_url = env::var("AUDIODOWN_DATABASE_URL")
-            .unwrap_or_else(|_| default_database_url(&data_dir));
+        let database_url =
+            env::var("AUDIODOWN_DATABASE_URL").unwrap_or_else(|_| default_database_url(&data_dir));
 
         Ok(Self {
             bind,
@@ -34,12 +36,22 @@ impl Config {
                 "/run/audiodown/core.token",
             )),
             log_filter: env_value("AUDIODOWN_LOG", "info"),
+            dev_mode: env_flag("AUDIODOWN_DEV_MODE"),
+            dev_token: env::var("AUDIODOWN_DEV_TOKEN")
+                .ok()
+                .filter(|value| !value.is_empty()),
         })
     }
 }
 
 fn env_value(name: &str, default: &str) -> String {
     env::var(name).unwrap_or_else(|_| default.to_string())
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
+        .unwrap_or(false)
 }
 
 fn default_database_url(data_dir: &Path) -> String {

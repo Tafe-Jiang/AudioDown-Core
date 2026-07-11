@@ -1,10 +1,7 @@
 #![forbid(unsafe_code)]
 
 use audiodown_server::{
-    app::build_router,
-    config::Config,
-    state::AppState,
-    supervisor::UnixSupervisorClient,
+    app::build_router, config::Config, state::AppState, supervisor::UnixSupervisorClient,
 };
 use audiodown_storage::Storage;
 use tokio::net::TcpListener;
@@ -28,7 +25,8 @@ async fn main() -> anyhow::Result<()> {
             &config.supervisor_socket,
             &config.core_token_file,
         )),
-    );
+    )
+    .with_development(config.dev_mode, config.dev_token);
     let app = build_router(state);
     let listener = TcpListener::bind(config.bind).await?;
     tracing::info!(address = %config.bind, "AudioDown Core listening");
