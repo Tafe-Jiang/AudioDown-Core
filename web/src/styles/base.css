@@ -28,3 +28,13 @@
     -webkit-tap-highlight-color: transparent;
   }
 }
+
+:root {
+  --app-sidebar-width: 14.5rem;
+  --app-sidebar-icon-width: 4rem;
+  --app-header-height: 3.25rem;
+}
+
+#app {
+  min-height: 100vh;
+}

@@ -10,11 +10,15 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/", redirect: "/discover" },
-    { path: "/discover", component: DiscoverView },
-    { path: "/search", component: SearchView },
-    { path: "/plugins", component: PluginsView },
-    { path: "/logs", component: LogsView },
-    { path: "/system", component: SystemView },
+    {
+      path: "/discover",
+      component: DiscoverView,
+      meta: { title: "发现" },
+    },
+    { path: "/search", component: SearchView, meta: { title: "搜索" } },
+    { path: "/plugins", component: PluginsView, meta: { title: "插件" } },
+    { path: "/logs", component: LogsView, meta: { title: "日志" } },
+    { path: "/system", component: SystemView, meta: { title: "系统" } },
   ],
 });
 

@@ -22,3 +22,17 @@ React/TSX source is not copied. All runtime components are Vue/Reka UI.
   `vaul-vue` Drawer at or below 760px, with one shared content contract.
 - `vue-sonner` is mounted once beside the root application component; inline
   errors remain owned by the affected view.
+
+## Application Shell Adaptations
+
+- `sidebar-07` supplies the desktop icon-rail behavior; AudioDown keeps only
+  product identity, five primary routes, empty-core status, and the collapse
+  command.
+- `dashboard-01` supplies the 52px sticky header and fluid workspace spacing;
+  redundant single-segment breadcrumbs and all sample dashboard data are
+  omitted.
+- Mobile navigation uses the generated Vue/Reka Sheet and closes after route
+  selection.
+- Desktop collapse state is stored only as
+  `audiodown.sidebar.collapsed`; the generated sidebar Cookie persistence is
+  disabled.

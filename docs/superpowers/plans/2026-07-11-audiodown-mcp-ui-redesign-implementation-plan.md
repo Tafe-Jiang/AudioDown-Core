@@ -504,6 +504,12 @@ git commit -m "阶段2：添加共享工作区状态组件" \
 - Create: `web/src/components/app/app-shell.test.ts`
 - Modify: `web/src/App.vue`
 - Modify: `web/src/router.ts`
+- Modify: `web/src/views/PluginsView.vue`
+- Modify: `web/src/views/SystemView.vue`
+- Modify: `web/src/components/ui/sidebar/Sidebar.vue`
+- Modify: `web/src/components/ui/sidebar/SidebarMenuButton.vue`
+- Modify: `web/src/components/ui/sidebar/SidebarProvider.vue`
+- Modify: `web/src/components/ui/sidebar/SidebarTrigger.vue`
 - Modify: `web/src/styles/base.css`
 - Modify: `docs/ui/mcp-component-map.md`
 
@@ -629,7 +635,7 @@ Expected: PASS at desktop and mobile DOM widths.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add web/src/App.vue web/src/router.ts web/src/components/app web/src/composables/useSystemStatus.ts web/src/styles/base.css docs/ui/mcp-component-map.md
+git add web/src/App.vue web/src/router.ts web/src/components/app web/src/components/ui/sidebar web/src/composables/useSystemStatus.ts web/src/views/PluginsView.vue web/src/views/SystemView.vue web/src/styles/base.css docs/ui/mcp-component-map.md docs/superpowers/plans/2026-07-11-audiodown-mcp-ui-redesign-implementation-plan.md
 git commit -m "阶段2：重绘响应式应用外壳" \
   -m "使用 MCP 侧栏模式重绘桌面工作区、移动导航和紧凑页头。"
 ```

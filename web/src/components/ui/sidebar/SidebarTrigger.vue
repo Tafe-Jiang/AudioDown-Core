@@ -8,6 +8,7 @@ import { useSidebar } from "./utils"
 
 const props = defineProps<{
   class?: HTMLAttributes["class"]
+  label?: string
 }>()
 
 const { toggleSidebar } = useSidebar()
@@ -19,10 +20,11 @@ const { toggleSidebar } = useSidebar()
     data-slot="sidebar-trigger"
     variant="ghost"
     size="icon-sm"
+    :aria-label="label"
     :class="cn('', props.class)"
     @click="toggleSidebar"
   >
     <PanelLeftIcon class="cn-rtl-flip" />
-    <span class="sr-only">Toggle Sidebar</span>
+    <span class="sr-only">{{ label ?? "切换侧栏" }}</span>
   </Button>
 </template>

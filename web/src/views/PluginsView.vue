@@ -1,24 +1,20 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
-import {
-  api,
-  type PluginListResponse,
-  type SystemResponse,
-} from "../api/client";
+import { api, type PluginListResponse } from "../api/client";
+import { useSystemStatus } from "../composables/useSystemStatus";
 
-const system = ref<SystemResponse | null>(null);
 const plugins = ref<PluginListResponse | null>(null);
-const error = ref("");
+const pluginError = ref("");
+const { system, loading: systemLoading, error: systemError } = useSystemStatus();
+const error = computed(() => pluginError.value || systemError.value || "");
+const loading = computed(() => systemLoading.value || !plugins.value);
 
 onMounted(async () => {
   try {
-    [system.value, plugins.value] = await Promise.all([
-      api.system(),
-      api.plugins(),
-    ]);
+    plugins.value = await api.plugins();
   } catch {
-    error.value = "无法读取插件状态";
+    pluginError.value = "无法读取插件状态";
   }
 });
 </script>
@@ -41,7 +37,7 @@ onMounted(async () => {
     </header>
 
     <div v-if="error" class="notice error-notice">{{ error }}</div>
-    <div v-else-if="!system || !plugins" class="loading-line">
+    <div v-else-if="loading || !system || !plugins" class="loading-line">
       正在读取插件运行状态...
     </div>
     <template v-else>

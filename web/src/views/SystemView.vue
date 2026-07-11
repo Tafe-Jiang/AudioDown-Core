@@ -1,18 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { useSystemStatus } from "../composables/useSystemStatus";
 
-import { api, type SystemResponse } from "../api/client";
-
-const system = ref<SystemResponse | null>(null);
-const error = ref("");
-
-onMounted(async () => {
-  try {
-    system.value = await api.system();
-  } catch {
-    error.value = "无法读取系统状态";
-  }
-});
+const { system, loading, error } = useSystemStatus();
 </script>
 
 <template>
@@ -25,7 +14,9 @@ onMounted(async () => {
     </header>
 
     <div v-if="error" class="notice error-notice">{{ error }}</div>
-    <div v-else-if="!system" class="loading-line">正在读取系统状态...</div>
+    <div v-else-if="loading || !system" class="loading-line">
+      正在读取系统状态...
+    </div>
     <dl v-else class="system-list">
       <div>
         <dt>Core 版本</dt>
