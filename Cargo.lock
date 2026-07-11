@@ -105,7 +105,9 @@ version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "audiodown-domain",
+ "audiodown-logging",
  "audiodown-plugin-api",
+ "audiodown-supervisor-protocol",
  "axum",
  "base64",
  "chrono",
@@ -113,6 +115,7 @@ dependencies = [
  "futures-util",
  "regex",
  "reqwest",
+ "secrecy",
  "semver",
  "serde",
  "serde_json",
@@ -143,9 +146,12 @@ dependencies = [
  "flate2",
  "mime_guess",
  "rust-embed",
+ "secrecy",
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "subtle",
  "tar",
  "tempfile",
  "thiserror",
@@ -1953,6 +1959,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "secrecy"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bd1c54ea06cfd2f6b63219704de0b9b4f72dcc2b8fdef820be6cd799780e91e"
+dependencies = [
+ "zeroize",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2068,6 +2083,12 @@ dependencies = [
  "cpufeatures 0.2.17",
  "digest 0.10.7",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"
@@ -2816,6 +2837,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

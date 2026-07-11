@@ -12,6 +12,7 @@ pub struct SystemResponse {
     pub version: String,
     pub supervisor: SupervisorStatus,
     pub plugin_count: usize,
+    pub development_mode: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,5 +45,6 @@ pub async fn system(State(state): State<AppState>) -> ApiResult<SystemResponse> 
         version: state.core_version.to_string(),
         supervisor,
         plugin_count,
+        development_mode: state.development.enabled,
     }))
 }

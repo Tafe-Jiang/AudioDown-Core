@@ -1,4 +1,7 @@
-use audiodown_domain::plugin::{PluginId, PluginStatus, RunMode};
+use audiodown_domain::{
+    log::{LogLevel, StructuredLog},
+    plugin::{PluginId, PluginStatus, RunMode},
+};
 use audiodown_plugin_api::manifest::PluginType;
 use audiodown_storage::{PluginRecord, RiskGrantRecord, Storage, StorageError};
 use chrono::{Duration, Utc};
@@ -179,6 +182,102 @@ async fn rejects_invalid_priorities_and_missing_plugin_mutations(
         storage.plugins().delete(&missing).await,
         Err(StorageError::NotFound)
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn insert_installing_never_overwrites_an_existing_plugin(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = Storage::connect("sqlite::memory:").await?;
+    storage.migrate().await?;
+    let plugin_id = PluginId::parse("com.audiodown.virtual.atomic")?;
+    let mut existing = fixture_record(&plugin_id);
+    existing.install_operation_id = Some(Uuid::new_v4());
+    existing.status = PluginStatus::Installing;
+    storage.plugins().upsert(&existing).await?;
+
+    let mut replacement = fixture_record(&plugin_id);
+    replacement.install_operation_id = Some(Uuid::new_v4());
+    replacement.status = PluginStatus::Installing;
+    assert!(storage
+        .plugins()
+        .insert_installing(&replacement)
+        .await
+        .is_err());
+    let stored = storage.plugins().get(&plugin_id).await?.unwrap();
+    assert_eq!(stored.install_operation_id, existing.install_operation_id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn replaces_commit_specific_risk_audit_after_fresh_authorization(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = Storage::connect("sqlite::memory:").await?;
+    storage.migrate().await?;
+    let plugin_id = PluginId::parse("com.audiodown.virtual.risk")?;
+    let first = RiskGrantRecord {
+        id: Uuid::new_v4(),
+        repository_id: "example.plugins".into(),
+        plugin_id: plugin_id.clone(),
+        commit_sha: "0123456789abcdef0123456789abcdef01234567".into(),
+        risk_kind: "npm_lifecycle_scripts".into(),
+        reason: "first approval".into(),
+        granted_at: Utc::now(),
+    };
+    storage.risk_grants().insert(&first).await?;
+    let replacement = RiskGrantRecord {
+        id: Uuid::new_v4(),
+        reason: "fresh approval".into(),
+        ..first.clone()
+    };
+
+    storage
+        .risk_grants()
+        .replace_commit_grant(&replacement)
+        .await?;
+    let stored = storage
+        .risk_grants()
+        .get_for(&plugin_id, &replacement.commit_sha, &replacement.risk_kind)
+        .await?
+        .unwrap();
+    assert_eq!(stored.id, replacement.id);
+    assert_eq!(stored.reason, "fresh approval");
+    Ok(())
+}
+
+#[tokio::test]
+async fn build_log_replay_is_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+    let storage = Storage::connect("sqlite::memory:").await?;
+    storage.migrate().await?;
+    let log = StructuredLog {
+        id: Uuid::new_v5(&Uuid::NAMESPACE_OID, b"operation:1"),
+        timestamp: Utc::now(),
+        level: LogLevel::Info,
+        component: "plugin-build".into(),
+        message: "deterministic build output".into(),
+        plugin_id: Some("com.audiodown.virtual.content".into()),
+        plugin_version: Some("1.0.0".into()),
+        platform_id: Some("virtual".into()),
+        request_id: Some(Uuid::new_v4().to_string()),
+        task_id: None,
+        container_id: None,
+        error_code: None,
+        context: serde_json::json!({"sequence": 1}),
+    };
+
+    storage.logs().append_if_absent(&log).await?;
+    storage.logs().append_if_absent(&log).await?;
+    assert_eq!(
+        storage
+            .logs()
+            .list(audiodown_storage::LogFilter {
+                plugin_id: None,
+                limit: 10,
+            })
+            .await?
+            .len(),
+        1
+    );
     Ok(())
 }
 

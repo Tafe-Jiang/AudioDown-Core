@@ -95,4 +95,6 @@ pub enum PluginManagerError {
     RiskGrantMismatch,
     #[error("plugin state store is unavailable")]
     PluginStateUnavailable,
+    #[error("plugin runtime control is unavailable")]
+    RuntimeUnavailable,
 }

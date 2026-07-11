@@ -5,7 +5,7 @@ use std::{
 };
 
 use audiodown_domain::plugin::PluginId;
-use audiodown_plugin_api::manifest::PluginType;
+use audiodown_plugin_api::manifest::{PluginManifest, PluginType};
 use chrono::{DateTime, Duration, Utc};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -153,6 +153,55 @@ impl SnapshotStore {
         })
     }
 
+    pub fn load_plugin(
+        &self,
+        snapshot_id: Uuid,
+        plugin_id: &PluginId,
+        now: DateTime<Utc>,
+    ) -> Result<StagedPlugin, PluginManagerError> {
+        let metadata = self.load_snapshot(snapshot_id)?;
+        if now.signed_duration_since(metadata.created_at) > Duration::minutes(SNAPSHOT_TTL_MINUTES)
+        {
+            return Err(PluginManagerError::SnapshotNotFound);
+        }
+        let plugin = metadata
+            .plugins
+            .into_iter()
+            .find(|candidate| &candidate.plugin_id == plugin_id)
+            .ok_or(PluginManagerError::InvalidStagingMetadata)?;
+        let manifest_path = self
+            .plugin_data
+            .join("staging")
+            .join(snapshot_id.to_string())
+            .join("repository")
+            .join(&plugin.plugin_path)
+            .join("audiodown-plugin.json");
+        let manifest_bytes =
+            std::fs::read(manifest_path).map_err(|_| PluginManagerError::SnapshotIo)?;
+        let manifest: PluginManifest = serde_json::from_slice(&manifest_bytes)
+            .map_err(|_| PluginManagerError::InvalidPluginManifest)?;
+        if manifest.id != plugin.plugin_id
+            || manifest.name != plugin.name
+            || manifest.version != plugin.version
+            || manifest.plugin_type != plugin.plugin_type
+        {
+            return Err(PluginManagerError::InvalidStagingMetadata);
+        }
+
+        Ok(StagedPlugin {
+            snapshot_id,
+            repository_id: metadata.repository_id,
+            source_url: metadata.source_url,
+            commit_sha: metadata.commit_sha,
+            plugin_path: plugin.plugin_path,
+            manifest,
+            manifest_hash: plugin.manifest_hash,
+            source_hash: plugin.source_hash,
+            requires_lifecycle_scripts: plugin.requires_lifecycle_scripts,
+            lifecycle_script_reason: plugin.lifecycle_script_reason,
+        })
+    }
+
     pub async fn cleanup_expired(&self, now: DateTime<Utc>) -> Result<(), PluginManagerError> {
         let staging_root = self.plugin_data.join("staging");
         if !staging_root.exists() {
@@ -276,6 +325,20 @@ impl From<ValidatedPlugin> for PluginPreview {
 pub struct PreparedOperation {
     pub operation_id: Uuid,
     pub plugin_id: PluginId,
+}
+
+#[derive(Debug, Clone)]
+pub struct StagedPlugin {
+    pub snapshot_id: Uuid,
+    pub repository_id: String,
+    pub source_url: String,
+    pub commit_sha: String,
+    pub plugin_path: String,
+    pub manifest: PluginManifest,
+    pub manifest_hash: String,
+    pub source_hash: String,
+    pub requires_lifecycle_scripts: bool,
+    pub lifecycle_script_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

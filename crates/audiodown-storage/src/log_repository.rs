@@ -50,6 +50,33 @@ impl<'a> LogRepository<'a> {
         Ok(())
     }
 
+    pub async fn append_if_absent(&self, log: &StructuredLog) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO structured_logs (
+              id, timestamp, level, component, message, plugin_id, plugin_version,
+              platform_id, request_id, task_id, container_id, error_code, context_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(log.id.to_string())
+        .bind(log.timestamp.to_rfc3339())
+        .bind(log_level_to_str(&log.level))
+        .bind(&log.component)
+        .bind(&log.message)
+        .bind(&log.plugin_id)
+        .bind(&log.plugin_version)
+        .bind(&log.platform_id)
+        .bind(&log.request_id)
+        .bind(&log.task_id)
+        .bind(&log.container_id)
+        .bind(&log.error_code)
+        .bind(serde_json::to_string(&log.context).map_err(invalid_data)?)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn list(&self, filter: LogFilter) -> Result<Vec<StructuredLog>, StorageError> {
         let limit = i64::from(filter.limit.clamp(1, 1000));
         let rows = if let Some(plugin_id) = filter.plugin_id {

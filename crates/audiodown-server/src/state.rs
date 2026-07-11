@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use audiodown_plugin_manager::service::PluginManagerService;
 use audiodown_storage::Storage;
+use secrecy::SecretString;
 use semver::Version;
 
 use crate::plugin_manager_adapters::{UnavailablePluginStateStore, UnavailableRepositorySource};
@@ -46,7 +47,7 @@ impl AppState {
         self
     }
 
-    pub fn with_development(mut self, enabled: bool, token: Option<String>) -> Self {
+    pub fn with_development(mut self, enabled: bool, token: Option<SecretString>) -> Self {
         self.development = DevelopmentConfig { enabled, token };
         self
     }
@@ -55,5 +56,11 @@ impl AppState {
 #[derive(Debug, Clone, Default)]
 pub struct DevelopmentConfig {
     pub enabled: bool,
-    pub token: Option<String>,
+    pub token: Option<SecretString>,
+}
+
+impl DevelopmentConfig {
+    pub fn public_view(&self) -> serde_json::Value {
+        serde_json::json!({"developmentMode": self.enabled})
+    }
 }

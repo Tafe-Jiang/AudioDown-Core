@@ -1584,9 +1584,19 @@ git commit -m "阶段2：构建受管 Node 插件镜像" \
 - Modify: `crates/audiodown-server/src/routes/system.rs`
 - Modify: `crates/audiodown-server/src/app.rs`
 - Modify: `crates/audiodown-server/src/main.rs`
+- Modify: `crates/audiodown-storage/src/plugin_repository.rs`
+- Modify: `crates/audiodown-storage/src/risk_grant_repository.rs`
+- Modify: `crates/audiodown-storage/src/log_repository.rs`
 - Test: `crates/audiodown-plugin-manager/tests/install_service.rs`
 - Test: `crates/audiodown-server/tests/development_config.rs`
 - Test: `crates/audiodown-server/tests/plugin_install_api.rs`
+- Test: `crates/audiodown-storage/tests/plugin_installation.rs`
+
+> **Design correction:** The two-phase transaction requires an insert-only
+> `installing` write, freshly authorized risk-grant replacement under the
+> existing commit-specific uniqueness constraint, and idempotent build-log
+> replay. These storage files are therefore part of Task 12 even though the
+> original Files list omitted them.
 
 - [ ] **Step 1: Write failing manager transaction tests**
 

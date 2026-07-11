@@ -4,6 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use secrecy::SecretString;
+
 pub const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
 pub const DEFAULT_GITHUB_ARCHIVE_BASE: &str = "https://codeload.github.com";
 
@@ -16,7 +18,7 @@ pub struct Config {
     pub core_token_file: PathBuf,
     pub log_filter: String,
     pub dev_mode: bool,
-    pub dev_token: Option<String>,
+    pub dev_token: Option<SecretString>,
     pub github_api_base: String,
     pub github_archive_base: String,
 }
@@ -54,10 +56,26 @@ impl Config {
             dev_mode,
             dev_token: env::var("AUDIODOWN_DEV_TOKEN")
                 .ok()
-                .filter(|value| !value.is_empty()),
+                .filter(|value| !value.is_empty())
+                .map(SecretString::new),
             github_api_base,
             github_archive_base,
         })
+    }
+
+    pub fn for_test_with_dev_token(token: &str) -> Self {
+        Self {
+            bind: "127.0.0.1:18080".parse().expect("test bind must parse"),
+            data_dir: PathBuf::from("/tmp/audiodown-test"),
+            database_url: "sqlite::memory:".to_string(),
+            supervisor_socket: PathBuf::from("/tmp/audiodown-supervisor.sock"),
+            core_token_file: PathBuf::from("/tmp/audiodown-core.token"),
+            log_filter: "info".to_string(),
+            dev_mode: true,
+            dev_token: Some(SecretString::new(token.to_string())),
+            github_api_base: DEFAULT_GITHUB_API_BASE.to_string(),
+            github_archive_base: DEFAULT_GITHUB_ARCHIVE_BASE.to_string(),
+        }
     }
 }
 

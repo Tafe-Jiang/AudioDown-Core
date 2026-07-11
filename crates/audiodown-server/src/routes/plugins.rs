@@ -3,6 +3,7 @@ use audiodown_domain::{
     plugin::{PluginId, PluginStatus, RunMode},
 };
 use audiodown_plugin_api::manifest::PluginManifest;
+use audiodown_plugin_manager::service::{InstallError, InstallPluginCommand, LifecycleRiskInput};
 use audiodown_storage::PluginRecord;
 use axum::{
     extract::{Path, Query, State},
@@ -10,10 +11,12 @@ use axum::{
     Json,
 };
 use chrono::Utc;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
+    plugin_manager_adapters::secret_matches,
     routes::{internal_error, ApiError, ApiResult},
     state::AppState,
     supervisor::{PluginRuntimeState, SupervisorError},
@@ -169,6 +172,46 @@ pub async fn runtime(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InstallPluginRequest {
+    #[serde(default)]
+    pub allow_lifecycle_scripts: bool,
+}
+
+pub async fn install(
+    State(state): State<AppState>,
+    Path((snapshot_id, plugin_id)): Path<(Uuid, String)>,
+    headers: HeaderMap,
+    Json(request): Json<InstallPluginRequest>,
+) -> ApiResult<PluginItem> {
+    let plugin_id = parse_plugin_id(plugin_id)?;
+    let developer_token = headers
+        .get("x-audiodown-dev-token")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| SecretString::new(value.to_string()));
+    let installed = state
+        .plugin_manager
+        .install(InstallPluginCommand {
+            snapshot_id,
+            plugin_id,
+            lifecycle_risk: LifecycleRiskInput {
+                explicitly_approved: request.allow_lifecycle_scripts,
+                developer_token,
+            },
+        })
+        .await
+        .map_err(install_error)?;
+
+    Ok(Json(PluginItem {
+        plugin_id: installed.plugin_id.to_string(),
+        name: installed.name,
+        version: installed.version,
+        status: installed.status,
+        enabled: true,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RegisterFixtureRequest {
     pub manifest: PluginManifest,
     pub manifest_hash: String,
@@ -190,9 +233,7 @@ pub async fn register_fixture(
     let supplied_token = headers
         .get("x-audiodown-dev-token")
         .and_then(|value| value.to_str().ok());
-    if state.development.token.as_deref().is_none()
-        || supplied_token != state.development.token.as_deref()
-    {
+    if !token_matches(state.development.token.as_ref(), supplied_token) {
         return Err(api_error(
             StatusCode::UNAUTHORIZED,
             "DEV_TOKEN_REQUIRED",
@@ -251,6 +292,73 @@ pub async fn register_fixture(
         status: record.status,
         enabled: record.enabled,
     }))
+}
+
+fn token_matches(expected: Option<&SecretString>, supplied: Option<&str>) -> bool {
+    let (Some(expected), Some(supplied)) = (expected, supplied) else {
+        return false;
+    };
+    secret_matches(expected, supplied)
+}
+
+fn install_error(error: InstallError) -> (StatusCode, Json<ApiError>) {
+    match error {
+        InstallError::SnapshotNotFound => api_error(
+            StatusCode::NOT_FOUND,
+            "SNAPSHOT_NOT_FOUND",
+            "Staged repository snapshot was not found",
+        ),
+        InstallError::PluginNotInSnapshot => api_error(
+            StatusCode::NOT_FOUND,
+            "PLUGIN_NOT_IN_SNAPSHOT",
+            "Plugin is not present in the staged repository",
+        ),
+        InstallError::PluginAlreadyInstalled => api_error(
+            StatusCode::CONFLICT,
+            "PLUGIN_ALREADY_INSTALLED",
+            "Plugin is already installed",
+        ),
+        InstallError::PluginOperationInProgress => api_error(
+            StatusCode::CONFLICT,
+            "PLUGIN_OPERATION_IN_PROGRESS",
+            "Another operation is already running for this plugin",
+        ),
+        InstallError::RiskGrantRequired => api_error(
+            StatusCode::CONFLICT,
+            "RISK_GRANT_REQUIRED",
+            "Lifecycle-script approval is required",
+        ),
+        InstallError::DeveloperModeRequired => api_error(
+            StatusCode::FORBIDDEN,
+            "DEVELOPER_MODE_REQUIRED",
+            "Developer mode is required",
+        ),
+        InstallError::DevTokenRequired => api_error(
+            StatusCode::UNAUTHORIZED,
+            "DEV_TOKEN_REQUIRED",
+            "A valid development token is required",
+        ),
+        InstallError::BuildFailed => api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "PLUGIN_BUILD_FAILED",
+            "Plugin build failed",
+        ),
+        InstallError::InstallTimeout => api_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "INSTALL_TIMEOUT",
+            "Plugin installation timed out",
+        ),
+        InstallError::RuntimeUnavailable => api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "SUPERVISOR_UNAVAILABLE",
+            "Plugin management service is unavailable",
+        ),
+        InstallError::ArtifactMismatch | InstallError::Internal => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "PLUGIN_INSTALL_FAILED",
+            "Plugin installation failed",
+        ),
+    }
 }
 
 fn empty_state() -> EmptyStateResponse {

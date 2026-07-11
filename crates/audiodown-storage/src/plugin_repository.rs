@@ -105,6 +105,52 @@ impl<'a> PluginRepository<'a> {
         Ok(())
     }
 
+    pub async fn insert_installing(&self, record: &PluginRecord) -> Result<(), StorageError> {
+        validate_priority(record.priority)?;
+        if record.status != PluginStatus::Installing || record.install_operation_id.is_none() {
+            return Err(StorageError::InvalidData(
+                "installing plugin record requires an operation ID".to_string(),
+            ));
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO plugins (
+              plugin_id, plugin_type, platform_id, name, version, protocol_version,
+              source_kind, source_ref, commit_sha, repository_id, manifest_json,
+              manifest_hash, source_hash, image_id, status, run_mode, priority,
+              enabled, last_error, install_operation_id, last_used_at, installed_at,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(record.plugin_id.as_str())
+        .bind(plugin_type_to_str(record.plugin_type))
+        .bind(&record.platform_id)
+        .bind(&record.name)
+        .bind(&record.version)
+        .bind(&record.protocol_version)
+        .bind(&record.source_kind)
+        .bind(&record.source_ref)
+        .bind(&record.commit_sha)
+        .bind(&record.repository_id)
+        .bind(serde_json::to_string(&record.manifest_json).map_err(invalid_data)?)
+        .bind(&record.manifest_hash)
+        .bind(&record.source_hash)
+        .bind(&record.image_id)
+        .bind(plugin_status_to_str(record.status))
+        .bind(run_mode_to_str(record.run_mode))
+        .bind(record.priority)
+        .bind(record.enabled)
+        .bind(&record.last_error)
+        .bind(record.install_operation_id.map(|id| id.to_string()))
+        .bind(record.last_used_at.map(|timestamp| timestamp.to_rfc3339()))
+        .bind(record.installed_at.to_rfc3339())
+        .bind(record.updated_at.to_rfc3339())
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn set_install_result(
         &self,
