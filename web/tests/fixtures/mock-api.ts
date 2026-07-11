@@ -16,6 +16,7 @@ export interface MockApiOptions {
   repositoryRisk?: boolean;
   plugins?: "empty" | "installed";
   logs?: "empty" | "populated";
+  search?: "empty" | "results" | "partial";
 }
 
 function fulfillJson(route: Route, value: unknown, status = 200) {
@@ -47,6 +48,16 @@ export async function mockCoreApi(
             priority: 100,
             sourceUrl: repositoryUrl,
             commitSha: longCommitSha,
+            capabilities: [
+              "content.search",
+              "content.discover",
+              "content.categories",
+              "content.album.get",
+              "content.tracks.list",
+            ],
+            searchEnabled: true,
+            discoverEnabled: true,
+            isDefaultContentPlugin: true,
           },
         ];
 
@@ -68,7 +79,101 @@ export async function mockCoreApi(
       });
     }
 
-    if (pathname === "/api/v1/discover" || pathname === "/api/v1/search") {
+    if (pathname === "/api/v1/search") {
+      if (method !== "GET" || !url.searchParams.get("q")) {
+        return fulfillJson(
+          route,
+          {
+            code: "INVALID_SEARCH_REQUEST",
+            message: "Search request is invalid",
+          },
+          400,
+        );
+      }
+      if (options.search === "results" || options.search === "partial") {
+        const cursor = url.searchParams.get("cursor");
+        if (cursor && cursor !== "opaque-search-page-2") {
+          return fulfillJson(
+            route,
+            { code: "INVALID_CURSOR", message: "Cursor is invalid" },
+            400,
+          );
+        }
+        const secondPage = cursor === "opaque-search-page-2";
+        return fulfillJson(route, {
+          items: secondPage
+            ? [
+                {
+                  item: {
+                    resourceType: "album",
+                    resourceId: "virtual-album-2",
+                    canonicalId: "fixture:album:page-2",
+                    title: "Virtual Search Album Page Two",
+                    subtitle: "Virtual Creator",
+                  },
+                  source: {
+                    platformId: "virtual-content",
+                    pluginId: longPluginId,
+                    pluginName:
+                      "Virtual Content Plugin With A Long Responsive Name",
+                    pluginVersion: "1.0.0",
+                  },
+                },
+              ]
+            : [
+                {
+                  item: {
+                    resourceType: "album",
+                    resourceId: "virtual-album-1",
+                    canonicalId: "fixture:album:shared",
+                    title: "Virtual Search Album",
+                    subtitle: "Virtual Creator",
+                    description:
+                      "确定性虚拟搜索结果，包含 verylongunbrokenmetadatavalueforresponsivechecks。",
+                  },
+                  source: {
+                    platformId: "virtual-content",
+                    pluginId: longPluginId,
+                    pluginName:
+                      "Virtual Content Plugin With A Long Responsive Name",
+                    pluginVersion: "1.0.0",
+                  },
+                },
+              ],
+          sections: [],
+          nextCursor: secondPage ? null : "opaque-search-page-2",
+          failures:
+            options.search === "partial"
+              ? [
+                  {
+                    code: "RESOURCE_ACCESS_DENIED",
+                    summary: "Virtual catalog source is unavailable",
+                    source: {
+                      platformId: "catalog",
+                      pluginId: "com.audiodown.catalog.content",
+                      pluginName: "Virtual Catalog",
+                      pluginVersion: "1.0.0",
+                    },
+                  },
+                ]
+              : [],
+          emptyState: null,
+        });
+      }
+      return fulfillJson(route, {
+        items: [],
+        sections: [],
+        nextCursor: null,
+        failures: [],
+        emptyState: {
+          reason: "NO_CONTENT_PLUGINS",
+          title: "尚未安装内容插件",
+          actionLabel: "添加 GitHub 插件仓库",
+        },
+      });
+    }
+
+    if (pathname === "/api/v1/discover") {
       return fulfillJson(route, {
         reason: "NO_CONTENT_PLUGINS",
         title: "尚未安装内容插件",

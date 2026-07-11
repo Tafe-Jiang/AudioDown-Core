@@ -10,6 +10,13 @@ const emptyState = {
   title: "尚未安装内容插件",
   actionLabel: "添加 GitHub 插件仓库",
 };
+const emptyEnvelope = {
+  items: [],
+  sections: [],
+  nextCursor: null,
+  failures: [],
+  emptyState,
+};
 
 async function mountWithRouter(component: typeof DiscoverView) {
   const router = createRouter({
@@ -55,10 +62,13 @@ describe("content capability empty workflows", () => {
   });
 
   it("keeps the search form visible and submits icon plus accessible text", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => emptyState,
-    });
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: async () =>
+          url.endsWith("/plugins") ? { items: [] } : emptyEnvelope,
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const { wrapper } = await mountWithRouter(SearchView);
     await flushPromises();
@@ -90,20 +100,32 @@ describe("content capability empty workflows", () => {
   });
 
   it("shows retryable search errors without hiding the query", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce({
+    let searchAttempts = 0;
+    const fetchMock = vi.fn((url: string) => {
+      if (url.endsWith("/plugins")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        });
+      }
+      searchAttempts += 1;
+      if (searchAttempts === 1) {
+        return Promise.reject(new Error("offline"));
+      }
+      return Promise.resolve({
         ok: true,
-        json: async () => emptyState,
+        json: async () => emptyEnvelope,
       });
+    });
     vi.stubGlobal("fetch", fetchMock);
     const { wrapper } = await mountWithRouter(SearchView);
     await flushPromises();
 
     const input = wrapper.get('input[type="search"]');
     await input.setValue("保留查询");
-    expect(wrapper.get('[role="alert"]').text()).toContain("无法读取搜索状态");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("无法读取搜索结果");
     await wrapper.get('button[aria-label="重试"]').trigger("click");
     await flushPromises();
 
@@ -116,10 +138,13 @@ describe("content capability empty workflows", () => {
   it("does not invent content or repository data", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => emptyState,
-      }),
+      vi.fn((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: async () =>
+            url.endsWith("/plugins") ? { items: [] } : emptyEnvelope,
+        }),
+      ),
     );
     const { wrapper } = await mountWithRouter(SearchView);
     await flushPromises();

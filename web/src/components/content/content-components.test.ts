@@ -32,8 +32,12 @@ const result: SourcedContentItem = {
 const failure: ContentFailure = {
   code: "RESOURCE_ACCESS_DENIED",
   summary: "Virtual catalog could not return this result",
-  pluginId: "com.audiodown.catalog.content",
-  platformId: "catalog",
+  source: {
+    platformId: "catalog",
+    pluginId: "com.audiodown.catalog.content",
+    pluginName: "Virtual Catalog",
+    pluginVersion: "1.0.0",
+  },
 };
 
 afterEach(() => {
@@ -102,7 +106,7 @@ describe("shared content result components", () => {
     });
     expect(wrapper.text()).toContain("部分来源暂不可用");
     expect(wrapper.text()).toContain(failure.summary);
-    expect(wrapper.text()).toContain(failure.pluginId);
+    expect(wrapper.text()).toContain(failure.source.pluginId);
   });
 
   it("provides bounded previous and opaque next cursor controls", async () => {

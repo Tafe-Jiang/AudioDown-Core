@@ -21,12 +21,13 @@ defineProps<{
       <ul class="grid gap-1.5">
         <li
           v-for="failure in failures"
-          :key="`${failure.platformId}:${failure.pluginId}:${failure.code}`"
+          :key="`${failure.source.platformId}:${failure.source.pluginId}:${failure.code}`"
           class="break-words"
         >
           {{ failure.summary }}
           <span class="block break-all text-xs text-muted-foreground">
-            {{ failure.platformId }} · {{ failure.pluginId }} ·
+            {{ failure.source.platformId }} ·
+            {{ failure.source.pluginId }} ·
             {{ failure.code }}
           </span>
         </li>

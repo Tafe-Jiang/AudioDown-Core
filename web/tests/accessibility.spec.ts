@@ -51,3 +51,20 @@ for (const viewport of viewports) {
     }
   });
 }
+
+test("Search aggregated results pass accessibility checks", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockCoreApi(page, { search: "partial" });
+  await page.goto("/search");
+  await page.getByLabel("搜索内容").fill("虚拟关键词");
+  await page.getByRole("button", { name: "搜索" }).click();
+  await expect(page.getByText("Virtual Search Album")).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(
+    results.violations.filter((violation) =>
+      ["serious", "critical"].includes(violation.impact ?? ""),
+    ),
+  ).toEqual([]);
+});

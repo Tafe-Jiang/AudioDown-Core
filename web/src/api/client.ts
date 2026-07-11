@@ -32,8 +32,7 @@ export interface SourcedContentItem {
 export interface ContentFailure {
   code: string;
   summary: string;
-  pluginId: string;
-  platformId: string;
+  source: ContentSource;
 }
 
 export type DiscoverLayout =
@@ -47,13 +46,17 @@ export interface DiscoverSection {
   id: string;
   title: string;
   layout: DiscoverLayout;
-  items: SourcedContentItem[];
+  items: ContentItem[];
+}
+
+export interface SourcedDiscoverSection {
+  section: DiscoverSection;
   source: ContentSource;
 }
 
 export interface ContentEnvelope {
   items: SourcedContentItem[];
-  sections: DiscoverSection[];
+  sections: SourcedDiscoverSection[];
   nextCursor: string | null;
   failures: ContentFailure[];
   emptyState: ContentEmptyState | null;

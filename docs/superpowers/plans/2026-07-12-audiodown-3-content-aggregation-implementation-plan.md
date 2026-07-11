@@ -23,7 +23,7 @@ This plan does not add credentials, Cookie handling, HTTP proxying, download pla
 
 ## Progress Snapshot
 
-As of 2026-07-12, Tasks 1 through 11 are complete and verified. Tasks 12 through 14 remain pending. The latest `main` push through Task 10 was an explicit intermediate checkpoint requested by the user; phase three is not complete until Task 14 and the clean-checkout verification pass.
+As of 2026-07-12, Tasks 1 through 12 are complete and verified. Tasks 13 and 14 remain pending. The latest `main` push through Task 12 is an explicit intermediate checkpoint requested by the user; phase three is not complete until Task 14 and the clean-checkout verification pass.
 
 ## Locked Decisions
 
@@ -599,6 +599,8 @@ git commit -m "阶段3：构建内容结果组件" \
 **Files:**
 - Modify: `web/src/views/SearchView.vue`
 - Create: `web/src/views/SearchView.test.ts`
+- Modify: `web/src/views/content-empty-states.test.ts`
+- Modify: `web/src/views/empty-state.test.ts`
 - Modify: `web/tests/fixtures/mock-api.ts`
 - Modify: `web/tests/accessibility.spec.ts`
 - Modify: `web/tests/visual/ui-visual.spec.ts`

@@ -11,6 +11,13 @@ const emptyState = {
   title: "尚未安装内容插件",
   actionLabel: "添加 GitHub 插件仓库",
 };
+const emptyEnvelope = {
+  items: [],
+  sections: [],
+  nextCursor: null,
+  failures: [],
+  emptyState,
+};
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -23,10 +30,17 @@ describe("empty state views", () => {
   ])("renders the %s empty state from Core", async (_name, view) => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => emptyState,
-      }),
+      vi.fn((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: async () => {
+            if (url.endsWith("/plugins")) {
+              return { items: [] };
+            }
+            return view === SearchView ? emptyEnvelope : emptyState;
+          },
+        }),
+      ),
     );
 
     const router = createRouter({
@@ -47,6 +61,11 @@ describe("empty state views", () => {
       },
     });
     await flushPromises();
+    if (view === SearchView) {
+      await wrapper.get('input[type="search"]').setValue("虚拟关键词");
+      await wrapper.get("form").trigger("submit");
+      await flushPromises();
+    }
 
     expect(wrapper.text()).toContain("尚未安装内容插件");
     expect(wrapper.text()).toContain("添加 GitHub 插件仓库");

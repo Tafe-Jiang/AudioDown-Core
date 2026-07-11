@@ -104,6 +104,37 @@ test("Search empty with query", async ({ page }) => {
   await expectVisual(page, "search-empty-with-query.png");
 });
 
+test("Search aggregated results", async ({ page }) => {
+  await page.setViewportSize(mobile);
+  await mockCoreApi(page, { search: "partial" });
+  await page.goto("/search");
+  await page.getByLabel("搜索内容").fill("虚拟关键词");
+  await page.getByRole("button", { name: "搜索" }).click();
+  await expect(page.getByText("Virtual Search Album")).toBeVisible();
+  await expect(page.getByText("部分来源暂不可用")).toBeVisible();
+  for (const locator of [
+    page.locator("form"),
+    page.locator("[data-plugin-id]").first(),
+    page.getByRole("navigation", { name: "内容分页" }),
+  ]) {
+    const box = await locator.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(mobile.width);
+  }
+  await expectVisual(page, "search-aggregated-results.png");
+});
+
+test("Search aggregated results desktop", async ({ page }) => {
+  await page.setViewportSize(desktop);
+  await mockCoreApi(page, { search: "results" });
+  await page.goto("/search");
+  await page.getByLabel("搜索内容").fill("虚拟关键词");
+  await page.getByRole("button", { name: "搜索" }).click();
+  await expect(page.getByText("Virtual Search Album")).toBeVisible();
+  await expectVisual(page, "search-aggregated-results-desktop.png");
+});
+
 test("Plugins empty", async ({ page }) => {
   await page.setViewportSize(desktop);
   await mockCoreApi(page, { plugins: "empty" });
