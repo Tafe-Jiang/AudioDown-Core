@@ -8,6 +8,7 @@ import EmptyState from "../components/common/EmptyState.vue";
 import PageHeader from "../components/common/PageHeader.vue";
 import StatusBadge from "../components/common/StatusBadge.vue";
 import PluginRepositoryDialog from "../components/plugins/PluginRepositoryDialog.vue";
+import PluginTable from "../components/plugins/PluginTable.vue";
 import { Button } from "../components/ui/button";
 import { useSystemStatus } from "../composables/useSystemStatus";
 
@@ -34,6 +35,10 @@ async function loadPlugins() {
 
 async function handleInstalled(_plugin: PluginItem) {
   await Promise.all([loadPlugins(), refreshSystem()]);
+}
+
+function handleItemsRefreshed(items: PluginItem[]) {
+  plugins.value = { items };
 }
 
 onMounted(loadPlugins);
@@ -77,21 +82,12 @@ onMounted(loadPlugins);
         />
       </template>
 
-      <div v-if="plugins" class="grid gap-2">
-        <div
-          v-for="plugin in plugins.items"
-          :key="plugin.pluginId"
-          class="flex items-center justify-between gap-3 border-b border-border py-3"
-        >
-          <span class="min-w-0">
-            <strong class="block truncate text-sm">{{ plugin.name }}</strong>
-            <small class="text-muted-foreground">
-              {{ plugin.pluginType }} · {{ plugin.version }}
-            </small>
-          </span>
-          <StatusBadge tone="neutral" :label="plugin.status" />
-        </div>
-      </div>
+      <PluginTable
+        v-if="plugins"
+        :items="plugins.items"
+        :supervisor-available="system?.supervisor.available ?? false"
+        @items-refreshed="handleItemsRefreshed"
+      />
     </AsyncState>
 
     <PluginRepositoryDialog

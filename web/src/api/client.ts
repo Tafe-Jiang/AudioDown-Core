@@ -36,6 +36,23 @@ export interface PluginListResponse {
   items: PluginItem[];
 }
 
+export interface PluginSettings {
+  enabled: boolean;
+  runMode: PluginRunMode;
+  priority: number;
+}
+
+export interface PluginRuntimeState {
+  pluginId: string;
+  status: string;
+  containerId?: string;
+  logs?: Array<{
+    level: string;
+    message: string;
+    context: Record<string, unknown>;
+  }>;
+}
+
 export interface StructuredLog {
   id: string;
   timestamp: string;
@@ -80,6 +97,14 @@ async function requestJson<T>(
   path: string,
   options: JsonRequestOptions = {},
 ): Promise<T> {
+  const response = await request(path, options);
+  return response.json() as Promise<T>;
+}
+
+async function request(
+  path: string,
+  options: JsonRequestOptions = {},
+): Promise<Response> {
   const headers: Record<string, string> = {
     Accept: "application/json",
     ...options.headers,
@@ -98,7 +123,7 @@ async function requestJson<T>(
   if (!response.ok) {
     throw new Error(`Core API request failed with status ${response.status}`);
   }
-  return response.json() as Promise<T>;
+  return response;
 }
 
 export const api = {
@@ -132,4 +157,27 @@ export const api = {
             : undefined,
       },
     ),
+  updatePlugin: (pluginId: string, settings: PluginSettings) =>
+    requestJson<PluginItem>(
+      `/api/v1/plugins/${encodeURIComponent(pluginId)}`,
+      {
+        method: "PATCH",
+        body: settings,
+      },
+    ),
+  startPlugin: (pluginId: string) =>
+    requestJson<PluginRuntimeState>(
+      `/api/v1/plugins/${encodeURIComponent(pluginId)}/start`,
+      { method: "POST" },
+    ),
+  stopPlugin: (pluginId: string) =>
+    requestJson<PluginRuntimeState>(
+      `/api/v1/plugins/${encodeURIComponent(pluginId)}/stop`,
+      { method: "POST" },
+    ),
+  uninstallPlugin: async (pluginId: string) => {
+    await request(`/api/v1/plugins/${encodeURIComponent(pluginId)}`, {
+      method: "DELETE",
+    });
+  },
 };

@@ -59,3 +59,21 @@ React/TSX source is not copied. All runtime components are Vue/Reka UI.
   disabled.
 - Skeleton reports inspection/build progress, Alert keeps failures inline,
   and Sonner reports only successful completion without sensitive values.
+
+## Installed Plugin Management Adaptations
+
+- `data-table-demo` is reduced to a semantic desktop table because installed
+  plugin counts do not justify TanStack sorting, pagination, selection, or
+  column controls.
+- The same plugin data becomes a stable, `min-width: 0` item layout below the
+  desktop breakpoint; mobile management does not use a horizontally scrolling
+  table.
+- Switch updates enabled state optimistically and rolls back on failure.
+  Runtime commands, settings, errors, and busy state remain scoped to one
+  plugin row.
+- Run mode and priority use a right-side Sheet. Start and stop remain labeled
+  icon commands with Tooltip text, while settings and uninstall live in a
+  compact DropdownMenu.
+- Uninstall uses `alert-dialog-demo`, names the selected plugin, and remains
+  disabled with other runtime-changing commands when Supervisor is
+  unavailable.
