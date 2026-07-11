@@ -108,6 +108,7 @@ dependencies = [
  "audiodown-plugin-api",
  "axum",
  "base64",
+ "chrono",
  "flate2",
  "futures-util",
  "regex",
@@ -122,6 +123,7 @@ dependencies = [
  "tokio",
  "tower",
  "url",
+ "uuid",
 ]
 
 [[package]]

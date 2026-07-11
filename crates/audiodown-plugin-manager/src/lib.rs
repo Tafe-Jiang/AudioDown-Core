@@ -8,6 +8,7 @@ use thiserror::Error;
 pub mod archive;
 pub mod github;
 mod package;
+pub mod staging;
 pub mod validation;
 
 #[async_trait]
@@ -85,4 +86,10 @@ pub enum PluginManagerError {
     InvalidPackage,
     #[error("plugin tree contains a forbidden file or entry")]
     ForbiddenPluginFile,
+    #[error("staging metadata is invalid")]
+    InvalidStagingMetadata,
+    #[error("staged snapshot was not found")]
+    SnapshotNotFound,
+    #[error("lifecycle-script risk grant does not match the staged plugin")]
+    RiskGrantMismatch,
 }
