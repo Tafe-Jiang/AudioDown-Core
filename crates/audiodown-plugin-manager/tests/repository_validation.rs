@@ -279,6 +279,41 @@ fn rejects_malformed_or_duplicate_capabilities() {
 }
 
 #[test]
+fn rejects_unknown_capabilities_but_keeps_system_health() {
+    for capability in [
+        "content.seach",
+        "content.download.plan",
+        "credential.status",
+        "system.shell",
+    ] {
+        let fixture = RepositoryFixture::new();
+        fixture.mutate_manifest(|manifest| {
+            manifest["capabilities"] = json!(["system.health", capability]);
+        });
+        assert_rejected(&fixture, capability);
+    }
+
+    let fixture = RepositoryFixture::new();
+    fixture.mutate_manifest(|manifest| {
+        manifest["capabilities"] = json!([
+            "system.health",
+            "content.search",
+            "content.discover",
+            "content.categories",
+            "content.album.get",
+            "content.tracks.list"
+        ]);
+    });
+    validate_repository(
+        fixture.root(),
+        &"1.0.0-alpha.1".parse().unwrap(),
+        &"1.0.0".parse().unwrap(),
+        SnapshotLimits::default(),
+    )
+    .unwrap();
+}
+
+#[test]
 fn rejects_invalid_allowed_hosts() {
     for host in [
         "",

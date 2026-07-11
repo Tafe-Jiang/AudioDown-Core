@@ -6,7 +6,10 @@ use std::{
     sync::OnceLock,
 };
 
-use audiodown_plugin_api::{manifest::PluginManifest, repository::RepositoryIndex};
+use audiodown_plugin_api::{
+    manifest::{capability_is_supported, PluginManifest},
+    repository::RepositoryIndex,
+};
 use regex::Regex;
 use semver::{BuildMetadata, Prerelease, Version, VersionReq};
 use sha2::{Digest, Sha256};
@@ -148,7 +151,10 @@ fn validate_manifest(
 
     let mut capabilities = HashSet::new();
     for capability in &manifest.capabilities {
-        if !capability_pattern().is_match(capability) || !capabilities.insert(capability) {
+        if !capability_pattern().is_match(capability)
+            || !capabilities.insert(capability)
+            || !capability_is_supported(manifest.plugin_type, capability)
+        {
             return Err(PluginManagerError::InvalidPluginManifest);
         }
     }

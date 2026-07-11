@@ -2,6 +2,10 @@ use audiodown_domain::plugin::PluginId;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
+use crate::content::ContentMethod;
+
+pub const SYSTEM_HEALTH_CAPABILITY: &str = "system.health";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     #[serde(rename = "schemaVersion")]
@@ -25,6 +29,12 @@ pub struct PluginManifest {
 pub enum PluginType {
     Content,
     Credential,
+}
+
+pub fn capability_is_supported(plugin_type: PluginType, capability: &str) -> bool {
+    capability == SYSTEM_HEALTH_CAPABILITY
+        || (plugin_type == PluginType::Content
+            && ContentMethod::from_capability(capability).is_some())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
