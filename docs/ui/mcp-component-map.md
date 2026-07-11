@@ -103,3 +103,11 @@ React/TSX source is not copied. All runtime components are Vue/Reka UI.
 - Supervisor unavailability and developer mode share one Alert. Low-level
   Supervisor error details are not rendered, and the page has no restart,
   update, or secret-related controls.
+
+## MCP Audit
+
+- Vue components used instead of React registry code.
+- Semantic component map complete.
+- Accessible labels and focus behavior verified.
+- Responsive screenshots reviewed at 1440x900, 1024x768, and 390x844.
+- No plan-excluded product behavior added.

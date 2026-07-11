@@ -13,6 +13,9 @@ export interface MockApiOptions {
   supervisorAvailable?: boolean;
   developmentMode?: boolean;
   repositoryInspectionError?: boolean;
+  repositoryRisk?: boolean;
+  plugins?: "empty" | "installed";
+  logs?: "empty" | "populated";
 }
 
 function fulfillJson(route: Route, value: unknown, status = 200) {
@@ -28,21 +31,24 @@ export async function mockCoreApi(
   options: MockApiOptions = {},
 ) {
   const supervisorAvailable = options.supervisorAvailable ?? true;
-  let plugins = [
-    {
-      pluginId: longPluginId,
-      pluginType: "content",
-      platformId: "virtual-content",
-      name: "Virtual Content Plugin With A Long Responsive Name",
-      version: "1.0.0",
-      status: "installed",
-      enabled: true,
-      runMode: "on_demand",
-      priority: 100,
-      sourceUrl: repositoryUrl,
-      commitSha: longCommitSha,
-    },
-  ];
+  let plugins =
+    options.plugins === "empty"
+      ? []
+      : [
+          {
+            pluginId: longPluginId,
+            pluginType: "content",
+            platformId: "virtual-content",
+            name: "Virtual Content Plugin With A Long Responsive Name",
+            version: "1.0.0",
+            status: "installed",
+            enabled: true,
+            runMode: "on_demand",
+            priority: 100,
+            sourceUrl: repositoryUrl,
+            commitSha: longCommitSha,
+          },
+        ];
 
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -76,16 +82,19 @@ export async function mockCoreApi(
 
     if (pathname === "/api/v1/logs") {
       return fulfillJson(route, {
-        items: [
-          {
-            id: "018f0000-0000-7000-8000-000000000001",
-            timestamp: "2026-07-12T08:30:00Z",
-            level: "error",
-            component: "plugin-runtime-with-a-long-component-name",
-            message: longLogMessage,
-            pluginId: longPluginId,
-          },
-        ],
+        items:
+          options.logs === "empty"
+            ? []
+            : [
+                {
+                  id: "018f0000-0000-7000-8000-000000000001",
+                  timestamp: "2026-07-12T08:30:00Z",
+                  level: "error",
+                  component: "plugin-runtime-with-a-long-component-name",
+                  message: longLogMessage,
+                  pluginId: longPluginId,
+                },
+              ],
       });
     }
 
@@ -104,13 +113,18 @@ export async function mockCoreApi(
         plugins: [
           {
             pluginId: "com.audiodown.virtual.risk-plugin",
-            name: "Virtual Lifecycle Risk Plugin",
+            name:
+              options.repositoryRisk ?? true
+                ? "Virtual Lifecycle Risk Plugin"
+                : "Virtual Content Plugin",
             version: "1.0.0",
             pluginType: "content",
             alreadyInstalled: false,
-            requiresLifecycleScriptGrant: true,
+            requiresLifecycleScriptGrant: options.repositoryRisk ?? true,
             lifecycleScriptReason:
-              "依赖安装阶段脚本，需要开发者模式下逐次明确授权。",
+              options.repositoryRisk ?? true
+                ? "依赖安装阶段脚本，需要开发者模式下逐次明确授权。"
+                : null,
           },
         ],
       });
@@ -120,7 +134,19 @@ export async function mockCoreApi(
       pathname.includes("/plugin-repositories/") &&
       pathname.endsWith("/install")
     ) {
-      return fulfillJson(route, plugins[0]);
+      return fulfillJson(route, plugins[0] ?? {
+        pluginId: "com.audiodown.virtual.risk-plugin",
+        pluginType: "content",
+        platformId: "virtual-content",
+        name: "Virtual Lifecycle Risk Plugin",
+        version: "1.0.0",
+        status: "installed",
+        enabled: true,
+        runMode: "on_demand",
+        priority: 100,
+        sourceUrl: repositoryUrl,
+        commitSha: longCommitSha,
+      });
     }
 
     const pluginMatch = pathname.match(/^\/api\/v1\/plugins\/([^/]+)$/);

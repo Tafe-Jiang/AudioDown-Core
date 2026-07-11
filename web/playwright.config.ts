@@ -6,6 +6,13 @@ export default defineConfig({
   workers: 1,
   outputDir: "test-results",
   reporter: "list",
+  expect: {
+    toHaveScreenshot: {
+      animations: "disabled",
+      caret: "hide",
+      maxDiffPixelRatio: 0.01,
+    },
+  },
   use: {
     baseURL: "http://127.0.0.1:4173",
     trace: "retain-on-failure",

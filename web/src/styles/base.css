@@ -39,6 +39,15 @@
   min-height: 100vh;
 }
 
+@media (max-width: 767px) {
+  [data-slot="button"],
+  [data-slot="input"],
+  [data-slot="select-trigger"],
+  [data-slot="sidebar-menu-button"] {
+    min-height: 2.5rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

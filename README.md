@@ -28,6 +28,27 @@ docker compose up -d --build
 ./scripts/verify.sh
 ```
 
+## 界面
+
+- 五个操作路由：Discover（发现）、Search（搜索）、Plugins（插件）、
+  Logs（日志）、System（系统）。
+- 桌面端使用可折叠导航，移动端使用导航 Sheet。
+- MCP 选定的模式以 Vue/Reka UI 实现，不复制 React registry 代码。
+- 单元测试、类型检查和构建：
+
+  ```bash
+  docker run --rm -v "$(pwd)/web:/app" -w /app node:22-bookworm-slim \
+    sh -lc 'npm ci && npm test -- --run && npm run typecheck && npm run build'
+  ```
+
+- 固定 Playwright 验证：
+
+  ```bash
+  docker run --rm --ipc=host -v "$(pwd)/web:/app" -w /app \
+    mcr.microsoft.com/playwright:v1.61.1-noble \
+    sh -lc 'npm ci && npx playwright test'
+  ```
+
 ## 第一阶段边界
 
 - 不包含任何真实平台插件或真实下载能力。
