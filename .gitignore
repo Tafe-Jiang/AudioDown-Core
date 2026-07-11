@@ -5,6 +5,7 @@
 !.env.example
 /target/
 /node_modules/
+/web/node_modules/
 /web/dist/
 /data/
 **/*.db
