@@ -25,3 +25,13 @@ pub fn internal_error(error: impl std::fmt::Display) -> (StatusCode, Json<ApiErr
         }),
     )
 }
+
+pub async fn not_found() -> (StatusCode, Json<ApiError>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ApiError {
+            code: "NOT_FOUND",
+            message: "API route was not found".to_string(),
+        }),
+    )
+}
