@@ -45,3 +45,17 @@ React/TSX source is not copied. All runtime components are Vue/Reka UI.
   loading and retry never replace or clear the query.
 - Skeleton and Alert replace text-only loading and error lines. No sample
   content, platform, chart, or repository data is introduced.
+
+## Repository Installation Adaptations
+
+- `field-demo` supplies labeled URL and developer-token fields; the token is
+  password-only, memory-only, and sent exclusively in
+  `x-audiodown-dev-token`.
+- Dialog and Drawer share one URL/preview/installing state machine through
+  `ResponsiveDialog`; lifecycle risk approval is an inline preview section,
+  never a nested modal.
+- Repository and plugin metadata use Badge plus selectable rows. Inspection
+  remains available when Supervisor is unavailable, while installation is
+  disabled.
+- Skeleton reports inspection/build progress, Alert keeps failures inline,
+  and Sonner reports only successful completion without sensitive values.

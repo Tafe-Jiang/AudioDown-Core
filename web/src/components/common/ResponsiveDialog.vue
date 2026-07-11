@@ -31,7 +31,7 @@ const emit = defineEmits<{
 }>();
 
 const mediaQuery =
-  typeof window === "undefined"
+  typeof window === "undefined" || typeof window.matchMedia !== "function"
     ? undefined
     : window.matchMedia("(max-width: 760px)");
 const mobile = ref(mediaQuery?.matches ?? false);

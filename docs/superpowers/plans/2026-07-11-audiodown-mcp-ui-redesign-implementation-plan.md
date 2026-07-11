@@ -718,7 +718,10 @@ git commit -m "阶段2：重绘内容空状态流程" \
 - Create: `web/src/components/plugins/PluginRepositoryDialog.vue`
 - Create: `web/src/components/plugins/RepositoryPreview.vue`
 - Create: `web/src/components/plugins/plugin-repository-dialog.test.ts`
+- Modify: `web/src/components/common/ResponsiveDialog.vue`
 - Modify: `web/src/views/PluginsView.vue`
+- Modify: `web/src/components/ui/dialog/DialogContent.vue`
+- Modify: `web/src/components/ui/dialog/DialogFooter.vue`
 - Modify: `docs/ui/mcp-component-map.md`
 
 - [ ] **Step 1: Query MCP and write failing repository workflow tests**
@@ -875,7 +878,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add web/src/api/client.ts web/src/components/plugins web/src/views/PluginsView.vue docs/ui/mcp-component-map.md
+git add web/src/api/client.ts web/src/components/common/ResponsiveDialog.vue web/src/components/plugins web/src/components/ui/dialog/DialogContent.vue web/src/components/ui/dialog/DialogFooter.vue web/src/views/PluginsView.vue docs/ui/mcp-component-map.md docs/superpowers/plans/2026-07-11-audiodown-mcp-ui-redesign-implementation-plan.md
 git commit -m "阶段2：添加 MCP 仓库安装流程" \
   -m "使用响应式表单和预览流程实现仓库检查、风险确认与安装。"
 ```
