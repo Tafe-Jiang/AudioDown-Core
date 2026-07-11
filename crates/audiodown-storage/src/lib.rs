@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod content_routing_repository;
 mod log_repository;
 mod plugin_repository;
 mod risk_grant_repository;
@@ -50,6 +51,10 @@ impl Storage {
         PluginRepository::new(&self.pool)
     }
 
+    pub fn content_routing(&self) -> ContentRoutingRepository<'_> {
+        ContentRoutingRepository::new(&self.pool)
+    }
+
     pub fn logs(&self) -> LogRepository<'_> {
         LogRepository::new(&self.pool)
     }
@@ -70,3 +75,7 @@ pub enum StorageError {
     #[error("record not found")]
     NotFound,
 }
+pub use content_routing_repository::{
+    ContentParticipation, ContentParticipationKind, ContentRoutingCandidate,
+    ContentRoutingRepository,
+};

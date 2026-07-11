@@ -8,6 +8,41 @@ use chrono::Utc;
 use uuid::Uuid;
 
 #[tokio::test]
+async fn upgrades_the_phase_two_schema_with_content_routing(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await?;
+    sqlx::raw_sql(include_str!("../../../migrations/0001_initial.sql"))
+        .execute(&pool)
+        .await?;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0002_plugin_installation.sql"
+    ))
+    .execute(&pool)
+    .await?;
+    sqlx::raw_sql(include_str!("../../../migrations/0003_content_routing.sql"))
+        .execute(&pool)
+        .await?;
+
+    let columns = sqlx::query("PRAGMA table_info(plugins)")
+        .fetch_all(&pool)
+        .await?;
+    let names = columns
+        .iter()
+        .map(|row| sqlx::Row::get::<String, _>(row, "name"))
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"search_enabled".to_string()));
+    assert!(names.contains(&"discover_enabled".to_string()));
+
+    let table: String = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'platform_content_defaults'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(table, "platform_content_defaults");
+    Ok(())
+}
+
+#[tokio::test]
 async fn persists_plugin_state_and_structured_logs() -> Result<(), Box<dyn std::error::Error>> {
     let storage = Storage::connect("sqlite::memory:").await?;
     storage.migrate().await?;
