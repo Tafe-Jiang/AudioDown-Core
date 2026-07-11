@@ -8,8 +8,17 @@ rust-version.workspace = true
 [dependencies]
 async-trait.workspace = true
 flate2.workspace = true
+futures-util.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+serde.workspace = true
 tar.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+serde_json.workspace = true
+tempfile = "3.20"
+tower.workspace = true

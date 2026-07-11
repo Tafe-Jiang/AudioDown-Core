@@ -26,4 +26,22 @@ pub struct DownloadedSnapshot {
 pub enum PluginManagerError {
     #[error("invalid public GitHub repository URL")]
     InvalidRepositoryUrl,
+    #[error("invalid repository service base URL")]
+    InvalidServiceBaseUrl,
+    #[error("failed to create the repository HTTP client")]
+    HttpClient,
+    #[error("repository request failed")]
+    RepositoryRequest,
+    #[error("repository response returned a non-success status")]
+    NonSuccessResponse,
+    #[error("repository response was invalid")]
+    InvalidResponse,
+    #[error("repository default branch is missing")]
+    MissingDefaultBranch,
+    #[error("repository commit SHA is invalid")]
+    InvalidCommitSha,
+    #[error("repository archive exceeds the compressed size limit")]
+    ArchiveTooLarge,
+    #[error("snapshot filesystem operation failed")]
+    SnapshotIo,
 }
