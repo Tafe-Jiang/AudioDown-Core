@@ -1,0 +1,15 @@
+[package]
+name = "audiodown-plugin-manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+flate2.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+url.workspace = true
