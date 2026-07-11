@@ -29,7 +29,7 @@ semver = { version = "1.0", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "migrate", "chrono", "uuid"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "migrate", "macros", "chrono", "uuid"] }
 thiserror = "2.0"
 tokio = { version = "1.46", features = ["macros", "rt-multi-thread", "net", "signal", "time", "fs", "sync", "process", "io-util"] }
 tower = "0.5"
