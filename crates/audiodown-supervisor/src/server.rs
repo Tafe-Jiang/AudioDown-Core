@@ -6,9 +6,7 @@ use std::{
 };
 
 use audiodown_domain::plugin::PluginStatus;
-use audiodown_supervisor_protocol::{
-    PluginInstallOperationState, PluginRemoveResult, SupervisorParams,
-};
+use audiodown_supervisor_protocol::{PluginRemoveResult, SupervisorParams};
 use chrono::Utc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -18,11 +16,10 @@ use tokio::{
 use crate::{
     config::{Config, SupervisorIdentity},
     docker::DockerAdapter,
+    docker_build::DockerBuildAdapter,
+    install_operation::{InstallOperationError, InstallOperationManager},
     install_record,
-    protocol::{
-        OperationStoreError, ProtocolOperationStore, SupervisorMethod, SupervisorRequest,
-        SupervisorResponse,
-    },
+    protocol::{SupervisorMethod, SupervisorRequest, SupervisorResponse},
 };
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -38,11 +35,22 @@ pub async fn run(
     let listener = UnixListener::bind(&config.socket_path)?;
     set_socket_permissions(&config.socket_path).await?;
     let authenticator = std::sync::Arc::new(Authenticator::new(identity.token));
+    let build_adapter = std::sync::Arc::new(DockerBuildAdapter::connect(
+        config.plugin_data.clone(),
+        identity.installation_id.clone(),
+    )?);
+    let operations = InstallOperationManager::open(
+        &config.plugin_data,
+        identity.installation_id.clone(),
+        build_adapter,
+        Utc::now(),
+    )
+    .await?;
     let runtime = std::sync::Arc::new(Runtime {
         docker,
         plugin_data: config.plugin_data,
         installation_id: identity.installation_id,
-        operations: ProtocolOperationStore::default(),
+        operations,
     });
 
     loop {
@@ -182,14 +190,13 @@ async fn dispatch(
         }
         SupervisorMethod::PluginInstallBuild => {
             let params = install_params(request.params);
-            match runtime.operations.begin(
-                &runtime.installation_id,
-                params.plugin_id,
-                params.operation_id,
-                Utc::now(),
-            ) {
+            match runtime
+                .operations
+                .begin(params.plugin_id, params.operation_id, Utc::now())
+                .await
+            {
                 Ok(operation) => serialized_success(request.id, &operation),
-                Err(OperationStoreError::OperationIdMismatch) => SupervisorResponse::failure(
+                Err(InstallOperationError::OperationIdMismatch) => SupervisorResponse::failure(
                     request.id,
                     "OPERATION_ID_MISMATCH",
                     "The operation ID belongs to another plugin",
@@ -199,55 +206,48 @@ async fn dispatch(
         }
         SupervisorMethod::PluginInstallStatus => {
             let params = install_params(request.params);
-            match runtime.operations.get(
-                &runtime.installation_id,
-                &params.plugin_id,
-                params.operation_id,
-            ) {
+            match runtime
+                .operations
+                .status(&params.plugin_id, params.operation_id)
+                .await
+            {
                 Ok(operation) => serialized_success(request.id, &operation),
                 Err(error) => operation_failure(request.id, error),
             }
         }
         SupervisorMethod::PluginInstallFinalize => {
             let params = install_params(request.params);
-            match runtime.operations.set_state(
-                &runtime.installation_id,
-                &params.plugin_id,
-                params.operation_id,
-                PluginInstallOperationState::Finalized,
-                Utc::now(),
-            ) {
+            match runtime
+                .operations
+                .finalize(&params.plugin_id, params.operation_id, Utc::now())
+                .await
+            {
                 Ok(operation) => serialized_success(request.id, &operation),
                 Err(error) => operation_failure(request.id, error),
             }
         }
         SupervisorMethod::PluginInstallAbort => {
             let params = install_params(request.params);
-            match runtime.operations.set_state(
-                &runtime.installation_id,
-                &params.plugin_id,
-                params.operation_id,
-                PluginInstallOperationState::Aborted,
-                Utc::now(),
-            ) {
+            match runtime
+                .operations
+                .abort(&params.plugin_id, params.operation_id, Utc::now())
+                .await
+            {
                 Ok(operation) => serialized_success(request.id, &operation),
                 Err(error) => operation_failure(request.id, error),
             }
         }
         SupervisorMethod::PluginInstallList => {
-            match runtime.operations.list(&runtime.installation_id) {
-                Ok(operations) => serialized_success(request.id, &operations),
-                Err(error) => operation_failure(request.id, error),
-            }
+            let operations = runtime.operations.list().await;
+            serialized_success(request.id, &operations)
         }
         SupervisorMethod::PluginInstallAck => {
             let params = install_params(request.params);
-            match runtime.operations.acknowledge(
-                &runtime.installation_id,
-                &params.plugin_id,
-                params.operation_id,
-                Utc::now(),
-            ) {
+            match runtime
+                .operations
+                .acknowledge(&params.plugin_id, params.operation_id, Utc::now())
+                .await
+            {
                 Ok(operation) => serialized_success(request.id, &operation),
                 Err(error) => operation_failure(request.id, error),
             }
@@ -294,12 +294,21 @@ fn serialized_success(request_id: String, result: &impl serde::Serialize) -> Sup
     }
 }
 
-fn operation_failure(request_id: String, error: OperationStoreError) -> SupervisorResponse {
+fn operation_failure(request_id: String, error: InstallOperationError) -> SupervisorResponse {
     let code = match error {
-        OperationStoreError::OperationIdMismatch => "OPERATION_ID_MISMATCH",
-        OperationStoreError::NotFound => "OPERATION_NOT_FOUND",
-        OperationStoreError::NotTerminal => "OPERATION_NOT_TERMINAL",
-        OperationStoreError::StatePoisoned => "OPERATION_STATE_UNAVAILABLE",
+        InstallOperationError::OperationIdMismatch => "OPERATION_ID_MISMATCH",
+        InstallOperationError::BuildBusy => "BUILD_BUSY",
+        InstallOperationError::OperationCapacityReached => "OPERATION_CAPACITY_REACHED",
+        InstallOperationError::NotFound => "OPERATION_NOT_FOUND",
+        InstallOperationError::InvalidTransition => "INVALID_OPERATION_TRANSITION",
+        InstallOperationError::NotTerminal => "OPERATION_NOT_TERMINAL",
+        InstallOperationError::InstalledAttestationMismatch => "INSTALL_ATTESTATION_MISMATCH",
+        InstallOperationError::CandidateAlreadyExists => "CANDIDATE_ALREADY_EXISTS",
+        InstallOperationError::InvalidPath => "INVALID_OPERATION_PATH",
+        InstallOperationError::Adapter(_) => "BUILD_ADAPTER_FAILED",
+        InstallOperationError::Io { .. } | InstallOperationError::Json { .. } => {
+            "OPERATION_STATE_UNAVAILABLE"
+        }
     };
     SupervisorResponse::failure(request_id, code, error.to_string())
 }
@@ -315,7 +324,7 @@ struct Runtime {
     docker: DockerAdapter,
     plugin_data: std::path::PathBuf,
     installation_id: String,
-    operations: ProtocolOperationStore,
+    operations: InstallOperationManager<DockerBuildAdapter>,
 }
 
 async fn read_request(stream: &mut UnixStream) -> anyhow::Result<Vec<u8>> {

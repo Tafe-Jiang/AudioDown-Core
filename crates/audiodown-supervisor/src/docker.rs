@@ -54,6 +54,7 @@ impl DockerAdapter {
         &self,
         install: ValidatedInstall,
     ) -> Result<StartedPlugin, DockerAdapterError> {
+        self.verify_install_image(&install).await?;
         let plugin_id = install.installed.plugin_id.clone();
         let plugin_version = install.manifest.version.to_string();
         let spec = PluginContainerPolicy::build(install.installed)?;
@@ -264,6 +265,31 @@ impl DockerAdapter {
         Ok(None)
     }
 
+    async fn verify_install_image(
+        &self,
+        install: &ValidatedInstall,
+    ) -> Result<(), DockerAdapterError> {
+        let Some(expected) = install.expected_image_labels.as_ref() else {
+            return Ok(());
+        };
+        let image = self
+            .docker
+            .inspect_image(&install.installed.image_id)
+            .await?;
+        let labels = image
+            .config
+            .and_then(|config| config.labels)
+            .unwrap_or_default();
+        if expected
+            .iter()
+            .all(|(key, value)| labels.get(key) == Some(value))
+        {
+            Ok(())
+        } else {
+            Err(DockerAdapterError::ImageLabelMismatch)
+        }
+    }
+
     async fn wait_for_handshake(
         &self,
         container_id: &str,
@@ -462,6 +488,8 @@ pub enum DockerAdapterError {
     Policy(#[from] PolicyError),
     #[error("container labels do not match the requested plugin")]
     LabelMismatch,
+    #[error("managed image labels do not match the install attestation")]
+    ImageLabelMismatch,
     #[error("plugin handshake failed: {0}")]
     Handshake(String),
 }

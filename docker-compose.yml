@@ -26,6 +26,8 @@ services:
     image: audiodown/supervisor:1.0.0-alpha.1
     container_name: audiodown-supervisor
     restart: unless-stopped
+    environment:
+      AUDIODOWN_SUPERVISOR_IMAGE: "audiodown/supervisor:1.0.0-alpha.1"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - "${AUDIODOWN_HOST_DATA_DIR:-./data}/plugins:/data/plugins"
