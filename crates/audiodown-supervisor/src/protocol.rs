@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 pub use audiodown_supervisor_protocol::{
-    PluginInstallRequest, PluginRequest, ProtocolError, SupervisorMethod, SupervisorParams,
-    SupervisorProtocolError, SupervisorRequest, SupervisorResponse,
+    PluginInstallRequest, PluginRequest, PluginRpcRequest, ProtocolError, SupervisorMethod,
+    SupervisorParams, SupervisorProtocolError, SupervisorRequest, SupervisorResponse,
 };
 
 #[derive(Default)]

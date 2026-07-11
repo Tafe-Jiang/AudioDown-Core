@@ -188,11 +188,17 @@ async fn dispatch(
                 Err(error) => docker_failure(request.id, error),
             }
         }
-        SupervisorMethod::PluginRpc => SupervisorResponse::failure(
-            request.id,
-            "PLUGIN_RPC_UNAVAILABLE",
-            "Plugin RPC execution is not available",
-        ),
+        SupervisorMethod::PluginRpc => {
+            let params = rpc_params(request.params);
+            match runtime
+                .docker
+                .invoke_plugin(&params.plugin_id, params.method, params.params)
+                .await
+            {
+                Ok(result) => serialized_success(request.id, &result),
+                Err(error) => plugin_rpc_failure(request.id, error),
+            }
+        }
         SupervisorMethod::PluginInstallBuild => {
             let params = install_params(request.params);
             match runtime
@@ -303,6 +309,13 @@ fn install_params(
     params
 }
 
+fn rpc_params(params: Option<SupervisorParams>) -> audiodown_supervisor_protocol::PluginRpcRequest {
+    let Some(SupervisorParams::Rpc(params)) = params else {
+        unreachable!("validated plugin RPC method has RPC params");
+    };
+    params
+}
+
 fn serialized_success(request_id: String, result: &impl serde::Serialize) -> SupervisorResponse {
     match serde_json::to_value(result) {
         Ok(result) => SupervisorResponse::success(request_id, result),
@@ -338,6 +351,23 @@ fn docker_failure(
     error: crate::docker::DockerAdapterError,
 ) -> SupervisorResponse {
     SupervisorResponse::failure(request_id, "DOCKER_OPERATION_FAILED", error.to_string())
+}
+
+fn plugin_rpc_failure(
+    request_id: String,
+    error: crate::docker::DockerAdapterError,
+) -> SupervisorResponse {
+    let code = match error {
+        crate::docker::DockerAdapterError::PluginNotRunning => "PLUGIN_UNAVAILABLE",
+        crate::docker::DockerAdapterError::RpcTimeout => "PLUGIN_TIMEOUT",
+        crate::docker::DockerAdapterError::InvalidRpcRequest
+        | crate::docker::DockerAdapterError::RpcExecFailed
+        | crate::docker::DockerAdapterError::RpcStderr
+        | crate::docker::DockerAdapterError::InvalidRpcResponse
+        | crate::docker::DockerAdapterError::RpcResponseTooLarge => "PLUGIN_RESPONSE_INVALID",
+        _ => "DOCKER_OPERATION_FAILED",
+    };
+    SupervisorResponse::failure(request_id, code, error.to_string())
 }
 
 struct Runtime {

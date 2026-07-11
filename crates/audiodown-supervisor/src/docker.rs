@@ -5,7 +5,13 @@ use std::{
 };
 
 use audiodown_domain::plugin::PluginId;
+use audiodown_plugin_api::{
+    content::ContentMethod,
+    rpc::{JsonRpcRequest, JsonRpcResponse},
+};
+use audiodown_supervisor_protocol::{PluginRpcResult, ProtocolError};
 use bollard::{
+    container::LogOutput,
     exec::{CreateExecOptions, StartExecResults},
     models::{ContainerCreateBody, HostConfig},
     query_parameters::{
@@ -17,6 +23,7 @@ use bollard::{
 use futures_util::StreamExt;
 use serde::Serialize;
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::{
     install_record::ValidatedInstall,
@@ -26,6 +33,8 @@ use crate::{
 const RPC_SOCKET: &str = "/tmp/audiodown-rpc.sock";
 const HANDSHAKE_ATTEMPTS: usize = 40;
 const HANDSHAKE_RETRY_DELAY: Duration = Duration::from_millis(100);
+const MAX_PLUGIN_RPC_BYTES: usize = 1024 * 1024;
+pub const PLUGIN_RPC_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub struct DockerAdapter {
     docker: Docker,
@@ -52,6 +61,13 @@ pub struct ManagedRemovalPlan {
     pub image_id: String,
     pub install_directory: PathBuf,
     pub expected_image_labels: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContentRpcExecPlan {
+    pub command: Vec<String>,
+    pub user: String,
+    pub working_dir: String,
 }
 
 impl DockerAdapter {
@@ -235,6 +251,77 @@ impl DockerAdapter {
             return Ok(Vec::new());
         };
         self.plugin_logs_by_container(&container_id).await
+    }
+
+    pub async fn invoke_plugin(
+        &self,
+        plugin_id: &PluginId,
+        method: ContentMethod,
+        params: serde_json::Value,
+    ) -> Result<PluginRpcResult, DockerAdapterError> {
+        let container_id = self
+            .find_managed_container(plugin_id)
+            .await?
+            .ok_or(DockerAdapterError::PluginNotRunning)?;
+        let inspection = self
+            .docker
+            .inspect_container(
+                &container_id,
+                None::<bollard::query_parameters::InspectContainerOptions>,
+            )
+            .await?;
+        if !inspection
+            .state
+            .and_then(|state| state.running)
+            .unwrap_or(false)
+        {
+            return Err(DockerAdapterError::PluginNotRunning);
+        }
+
+        let request_id = Uuid::new_v4().to_string();
+        let plan = build_content_rpc_exec(plugin_id, method, params, &request_id)?;
+        let execution = async {
+            let exec = self
+                .docker
+                .create_exec(
+                    &container_id,
+                    CreateExecOptions {
+                        attach_stdout: Some(true),
+                        attach_stderr: Some(true),
+                        cmd: Some(plan.command.iter().map(String::as_str).collect()),
+                        user: Some(&plan.user),
+                        working_dir: Some(&plan.working_dir),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            let mut output = match self.docker.start_exec(&exec.id, None).await? {
+                StartExecResults::Attached { output, .. } => output,
+                StartExecResults::Detached => return Err(DockerAdapterError::RpcExecFailed),
+            };
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            while let Some(chunk) = output.next().await {
+                match chunk? {
+                    LogOutput::StdOut { message } | LogOutput::Console { message } => {
+                        append_rpc_bytes(&mut stdout, &stderr, &message)?;
+                    }
+                    LogOutput::StdErr { message } => {
+                        append_rpc_bytes(&mut stderr, &stdout, &message)?;
+                    }
+                    LogOutput::StdIn { .. } => {}
+                }
+            }
+            let inspection = self.docker.inspect_exec(&exec.id).await?;
+            let exit_code = inspection
+                .exit_code
+                .ok_or(DockerAdapterError::RpcExecFailed)?;
+            parse_content_rpc_output(&request_id, &stdout, &stderr, exit_code)
+        };
+
+        tokio::time::timeout(PLUGIN_RPC_TIMEOUT, execution)
+            .await
+            .map_err(|_| DockerAdapterError::RpcTimeout)?
     }
 
     pub async fn remove_plugin(
@@ -461,6 +548,87 @@ impl DockerAdapter {
     }
 }
 
+pub fn build_content_rpc_exec(
+    _plugin_id: &PluginId,
+    method: ContentMethod,
+    params: serde_json::Value,
+    request_id: &str,
+) -> Result<ContentRpcExecPlan, DockerAdapterError> {
+    if request_id.is_empty() || request_id.len() > 128 || request_id.contains('\0') {
+        return Err(DockerAdapterError::InvalidRpcRequest);
+    }
+    let request = JsonRpcRequest::new(request_id, method.capability(), params)
+        .map_err(|_| DockerAdapterError::InvalidRpcRequest)?;
+    let request =
+        serde_json::to_string(&request).map_err(|_| DockerAdapterError::InvalidRpcRequest)?;
+    if request.len() > MAX_PLUGIN_RPC_BYTES {
+        return Err(DockerAdapterError::InvalidRpcRequest);
+    }
+    Ok(ContentRpcExecPlan {
+        command: vec![
+            "node".to_string(),
+            "-e".to_string(),
+            CONTENT_RPC_SCRIPT.to_string(),
+            RPC_SOCKET.to_string(),
+            request,
+            request_id.to_string(),
+        ],
+        user: "10002:10002".to_string(),
+        working_dir: "/tmp".to_string(),
+    })
+}
+
+pub fn parse_content_rpc_output(
+    request_id: &str,
+    stdout: &[u8],
+    stderr: &[u8],
+    exit_code: i64,
+) -> Result<PluginRpcResult, DockerAdapterError> {
+    if stdout.len().saturating_add(stderr.len()) > MAX_PLUGIN_RPC_BYTES {
+        return Err(DockerAdapterError::RpcResponseTooLarge);
+    }
+    if exit_code != 0 {
+        return Err(DockerAdapterError::RpcExecFailed);
+    }
+    if !stderr.is_empty() {
+        return Err(DockerAdapterError::RpcStderr);
+    }
+    let output = std::str::from_utf8(stdout).map_err(|_| DockerAdapterError::InvalidRpcResponse)?;
+    let lines = output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    if lines.len() != 1 {
+        return Err(DockerAdapterError::InvalidRpcResponse);
+    }
+    let response: JsonRpcResponse =
+        serde_json::from_str(lines[0]).map_err(|_| DockerAdapterError::InvalidRpcResponse)?;
+    if response.id != request_id {
+        return Err(DockerAdapterError::InvalidRpcResponse);
+    }
+    PluginRpcResult::new(response).map_err(|error| match error {
+        ProtocolError::RpcResponseTooLarge => DockerAdapterError::RpcResponseTooLarge,
+        _ => DockerAdapterError::InvalidRpcResponse,
+    })
+}
+
+fn append_rpc_bytes(
+    destination: &mut Vec<u8>,
+    other: &[u8],
+    bytes: &[u8],
+) -> Result<(), DockerAdapterError> {
+    if destination
+        .len()
+        .saturating_add(other.len())
+        .saturating_add(bytes.len())
+        > MAX_PLUGIN_RPC_BYTES
+    {
+        return Err(DockerAdapterError::RpcResponseTooLarge);
+    }
+    destination.extend_from_slice(bytes);
+    Ok(())
+}
+
 pub fn managed_removal_plan(
     plugin_data: &Path,
     installation_id: &str,
@@ -597,6 +765,50 @@ socket.on("data", (chunk) => {
 socket.on("end", () => process.exit(0));
 "#;
 
+const CONTENT_RPC_SCRIPT: &str = r#"
+const net = require("node:net");
+const [socketPath, requestJson, expectedId] = process.argv.slice(1);
+const socket = net.createConnection(socketPath);
+let buffer = "";
+let complete = false;
+const fail = (message) => {
+  process.stderr.write(`${message}\n`);
+  socket.destroy();
+  process.exit(1);
+};
+const timer = setTimeout(() => fail("RPC call timed out"), 7500);
+socket.on("error", (error) => fail(error.message));
+socket.on("connect", () => socket.write(`${requestJson}\n`));
+socket.on("data", (chunk) => {
+  if (complete) return fail("RPC returned more than one response");
+  buffer += chunk.toString("utf8");
+  if (Buffer.byteLength(buffer, "utf8") > 1024 * 1024) {
+    return fail("RPC response exceeds 1 MiB");
+  }
+  const newline = buffer.indexOf("\n");
+  if (newline < 0) return;
+  const line = buffer.slice(0, newline);
+  const remainder = buffer.slice(newline + 1).trim();
+  if (!line || remainder) return fail("RPC returned more than one response");
+  let response;
+  try {
+    response = JSON.parse(line);
+  } catch {
+    return fail("RPC response is not valid JSON");
+  }
+  if (response?.jsonrpc !== "2.0" || response?.id !== expectedId) {
+    return fail("RPC response identity mismatch");
+  }
+  complete = true;
+  clearTimeout(timer);
+  process.stdout.write(`${JSON.stringify(response)}\n`);
+  socket.end();
+});
+socket.on("end", () => {
+  if (!complete) fail("RPC ended without a response");
+});
+"#;
+
 #[derive(Debug, Error)]
 pub enum DockerAdapterError {
     #[error("Docker operation failed")]
@@ -613,4 +825,18 @@ pub enum DockerAdapterError {
     UnsafeInstallDirectory,
     #[error("plugin handshake failed: {0}")]
     Handshake(String),
+    #[error("plugin is not running")]
+    PluginNotRunning,
+    #[error("plugin RPC request is invalid")]
+    InvalidRpcRequest,
+    #[error("plugin RPC timed out")]
+    RpcTimeout,
+    #[error("plugin RPC exec failed")]
+    RpcExecFailed,
+    #[error("plugin RPC wrote to stderr")]
+    RpcStderr,
+    #[error("plugin RPC response is invalid")]
+    InvalidRpcResponse,
+    #[error("plugin RPC response exceeded the size limit")]
+    RpcResponseTooLarge,
 }
