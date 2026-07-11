@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 audiodown-domain = { path = "../audiodown-domain" }
 audiodown-plugin-api = { path = "../audiodown-plugin-api" }
 audiodown-supervisor-protocol.workspace = true
@@ -20,3 +21,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
