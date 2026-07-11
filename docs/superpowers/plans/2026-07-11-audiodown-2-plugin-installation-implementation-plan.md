@@ -51,7 +51,9 @@ This plan deliberately stops after plugin management. It does not invoke content
 - Approved revision: Task 15 is expanded into the ten committed tasks in
   `2026-07-11-audiodown-mcp-ui-redesign-implementation-plan.md`; those commits
   replace the former single Task 15 commit.
-- Use the suggested commit subject and add one concise Chinese commit body describing the change.
+- Use the suggested Chinese commit subject in the exact
+  `阶段2：简要说明本次更新内容` format and add one concise Chinese commit body
+  describing the change.
 - Diagnose failing tests; never bypass, weaken, or delete them.
 - Prefer `rust:1.88-bookworm` and `node:22-bookworm-slim` verification containers when local toolchains are unavailable.
 - Do not push intermediate broken states. Push `main` only after the clean-clone verification passes.
@@ -248,7 +250,7 @@ Expected: PASS.
 
 ```bash
 git add crates/audiodown-plugin-api
-git commit -m "feat: define plugin repository contracts" \
+git commit -m "阶段2：定义插件仓库契约" \
   -m "定义仓库索引、插件预览和构建风险的稳定契约。"
 ```
 
@@ -359,7 +361,7 @@ Expected: PASS.
 
 ```bash
 git add Cargo.toml Cargo.lock crates/audiodown-plugin-manager
-git commit -m "feat: add GitHub plugin source parser" \
+git commit -m "阶段2：添加 GitHub 仓库地址解析" \
   -m "新增公共 GitHub 仓库地址解析和插件管理骨架。"
 ```
 
@@ -442,7 +444,7 @@ Expected: PASS.
 
 ```bash
 git add crates/audiodown-plugin-manager
-git commit -m "feat: download immutable GitHub snapshots" \
+git commit -m "阶段2：锁定并下载仓库快照" \
   -m "解析默认分支并下载受限的不可变仓库快照。"
 ```
 
@@ -544,7 +546,7 @@ Expected: PASS.
 
 ```bash
 git add crates/audiodown-plugin-manager
-git commit -m "feat: safely extract plugin snapshots" \
+git commit -m "阶段2：安全解压插件仓库快照" \
   -m "安全解压仓库快照并拒绝越界及超限内容。"
 ```
 
@@ -675,7 +677,7 @@ Expected: PASS.
 
 ```bash
 git add crates/audiodown-plugin-manager
-git commit -m "feat: validate plugin repository contents" \
+git commit -m "阶段2：校验插件仓库内容" \
   -m "校验仓库索引、插件清单和 npm 锁文件。"
 ```
 
@@ -795,7 +797,7 @@ Expected: PASS.
 
 ```bash
 git add migrations crates/audiodown-domain crates/audiodown-storage
-git commit -m "feat: persist plugin installation state" \
+git commit -m "阶段2：持久化插件安装状态" \
   -m "持久化插件来源、设置、安装操作和风险授权。"
 ```
 
@@ -931,7 +933,7 @@ Expected: PASS.
 
 ```bash
 git add crates/audiodown-plugin-manager
-git commit -m "feat: stage validated plugin snapshots" \
+git commit -m "阶段2：暂存已校验插件快照" \
   -m "暂存已验证快照和受约束的安装操作元数据。"
 ```
 
@@ -1057,7 +1059,7 @@ Expected: PASS.
 
 ```bash
 git add Cargo.toml Cargo.lock crates/audiodown-plugin-manager crates/audiodown-server docker-compose.yml
-git commit -m "feat: inspect public plugin repositories" \
+git commit -m "阶段2：开放插件仓库检查接口" \
   -m "通过薄 API 暴露公共插件仓库检查能力。"
 ```
 
@@ -1261,7 +1263,7 @@ Expected: PASS.
 
 ```bash
 git add Cargo.toml Cargo.lock crates/audiodown-supervisor-protocol crates/audiodown-supervisor crates/audiodown-server
-git commit -m "feat: add idempotent Supervisor operations" \
+git commit -m "阶段2：添加 Supervisor 幂等操作协议" \
   -m "定义 Core 与 Supervisor 共用的幂等安装操作协议。"
 ```
 
@@ -1339,7 +1341,7 @@ Expected: PASS.
 
 ```bash
 git add Cargo.toml Cargo.lock crates/audiodown-supervisor
-git commit -m "feat: add isolated npm build proxy" \
+git commit -m "阶段2：添加隔离 npm 构建代理" \
   -m "新增仅允许固定 npm 主机的隔离构建代理。"
 ```
 
@@ -1563,7 +1565,7 @@ Expected: PASS.
 
 ```bash
 git add Cargo.lock crates/audiodown-supervisor docker docker-compose.yml
-git commit -m "feat: build managed Node plugin images" \
+git commit -m "阶段2：构建受管 Node 插件镜像" \
   -m "使用受限构建容器和固定运行时组装托管插件镜像。"
 ```
 
@@ -1756,7 +1758,7 @@ Expected: PASS.
 
 ```bash
 git add Cargo.lock crates/audiodown-plugin-manager crates/audiodown-server
-git commit -m "feat: install validated repository plugins" \
+git commit -m "阶段2：安装已校验仓库插件" \
   -m "完成风险授权和可恢复的两阶段插件安装事务。"
 ```
 
@@ -1896,7 +1898,7 @@ Expected: PASS.
 
 ```bash
 git add crates/audiodown-plugin-manager crates/audiodown-server crates/audiodown-supervisor
-git commit -m "feat: manage installed plugin settings" \
+git commit -m "阶段2：管理已安装插件设置" \
   -m "实现插件启禁、优先级、运行模式和受管卸载。"
 ```
 
@@ -1990,7 +1992,7 @@ Expected: PASS.
 
 ```bash
 git add Cargo.toml crates/audiodown-plugin-manager crates/audiodown-server
-git commit -m "feat: reconcile plugin runtime modes" \
+git commit -m "阶段2：协调插件运行模式" \
   -m "协调常驻插件启动和按需插件空闲停止。"
 ```
 
@@ -2279,7 +2281,7 @@ Expected: all checks PASS.
 
 ```bash
 git add test-fixtures tests scripts web .github README.md
-git commit -m "test: verify secure plugin installation" \
+git commit -m "阶段2：验证安全插件安装闭环" \
   -m "验证 GitHub 仓库快照安装、受限 Node 构建、插件管理和安全边界。"
 ```
 

@@ -398,7 +398,7 @@ Expected: PASS and the bundle contains no React dependency.
 
 ```bash
 git add web docs/ui/mcp-component-map.md
-git commit -m "feat: establish MCP Vue UI foundation" \
+git commit -m "阶段2：建立 MCP Vue 界面基础" \
   -m "引入 MCP 选定的 Vue 组件原语、设计令牌和固定前端依赖。"
 ```
 
@@ -489,7 +489,7 @@ Expected: PASS.
 
 ```bash
 git add web/src/components/common web/src/main.ts docs/ui/mcp-component-map.md
-git commit -m "feat: add shared workspace UI states" \
+git commit -m "阶段2：添加共享工作区状态组件" \
   -m "统一页面标题、状态标识、加载错误、空状态和响应式对话框。"
 ```
 
@@ -630,7 +630,7 @@ Expected: PASS at desktop and mobile DOM widths.
 
 ```bash
 git add web/src/App.vue web/src/router.ts web/src/components/app web/src/composables/useSystemStatus.ts web/src/styles/base.css docs/ui/mcp-component-map.md
-git commit -m "feat: redraw responsive application shell" \
+git commit -m "阶段2：重绘响应式应用外壳" \
   -m "使用 MCP 侧栏模式重绘桌面工作区、移动导航和紧凑页头。"
 ```
 
@@ -701,7 +701,7 @@ Expected: PASS.
 
 ```bash
 git add web/src/views docs/ui/mcp-component-map.md
-git commit -m "feat: redraw content empty workflows" \
+git commit -m "阶段2：重绘内容空状态流程" \
   -m "重绘发现和搜索空状态、查询表单、加载与错误反馈。"
 ```
 
@@ -870,7 +870,7 @@ Expected: PASS.
 
 ```bash
 git add web/src/api/client.ts web/src/components/plugins web/src/views/PluginsView.vue docs/ui/mcp-component-map.md
-git commit -m "feat: add MCP repository installation workflow" \
+git commit -m "阶段2：添加 MCP 仓库安装流程" \
   -m "使用响应式表单和预览流程实现仓库检查、风险确认与安装。"
 ```
 
@@ -967,7 +967,7 @@ Expected: PASS.
 
 ```bash
 git add web/src/api/client.ts web/src/components/plugins web/src/views/PluginsView.vue docs/ui/mcp-component-map.md
-git commit -m "feat: redraw installed plugin management" \
+git commit -m "阶段2：重绘已安装插件管理" \
   -m "重绘插件表格、运行控制、设置面板和卸载确认。"
 ```
 
@@ -1042,7 +1042,7 @@ Expected: PASS.
 
 ```bash
 git add web/src/components/logs web/src/views/LogsView.vue docs/ui/mcp-component-map.md
-git commit -m "feat: redraw structured log workspace" \
+git commit -m "阶段2：重绘结构化日志工作区" \
   -m "新增日志工具栏、响应式列表、详情面板和稳定加载状态。"
 ```
 
@@ -1107,7 +1107,7 @@ Expected: PASS.
 
 ```bash
 git add web/src/views/SystemView.vue web/src/views/SystemView.test.ts docs/ui/mcp-component-map.md
-git commit -m "feat: redraw system status view" \
+git commit -m "阶段2：重绘系统状态视图" \
   -m "以紧凑语义布局重绘 Core、Supervisor 和开发模式状态。"
 ```
 
@@ -1254,7 +1254,7 @@ Expected: PASS.
 
 ```bash
 git add web
-git commit -m "test: verify accessible responsive UI" \
+git commit -m "阶段2：验证无障碍响应式界面" \
   -m "验证桌面、平板和移动端导航、对话框、长文本与键盘可访问性。"
 ```
 
@@ -1396,7 +1396,7 @@ Commit:
 
 ```bash
 git add web docs/ui README.md
-git commit -m "docs: accept MCP UI redesign" \
+git commit -m "阶段2：记录 MCP 界面重绘验收" \
   -m "记录整体 Vue 工作区重绘、响应式截图和可访问性验收结果。"
 ```
 
