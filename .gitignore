@@ -1,0 +1,9 @@
+.DS_Store
+.superpowers/
+.env
+.env.*
+!.env.example
+/target/
+/node_modules/
+/web/dist/
+/data/
