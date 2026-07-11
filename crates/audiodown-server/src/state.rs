@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use audiodown_storage::Storage;
 use semver::Version;
-use serde::Serialize;
-use thiserror::Error;
+
+pub use crate::supervisor::{
+    SupervisorClient, SupervisorError, SupervisorHealth, UnavailableSupervisorClient,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,32 +25,5 @@ impl AppState {
             core_version,
             supervisor,
         }
-    }
-}
-
-#[async_trait]
-pub trait SupervisorClient: Send + Sync {
-    async fn ping(&self) -> Result<SupervisorHealth, SupervisorError>;
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SupervisorHealth {
-    pub service: String,
-}
-
-#[derive(Debug, Error)]
-#[error("{summary}")]
-pub struct SupervisorError {
-    pub summary: String,
-}
-
-pub struct UnavailableSupervisorClient;
-
-#[async_trait]
-impl SupervisorClient for UnavailableSupervisorClient {
-    async fn ping(&self) -> Result<SupervisorHealth, SupervisorError> {
-        Err(SupervisorError {
-            summary: "Supervisor is unavailable".to_string(),
-        })
     }
 }

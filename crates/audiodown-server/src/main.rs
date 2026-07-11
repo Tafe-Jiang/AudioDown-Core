@@ -3,7 +3,8 @@
 use audiodown_server::{
     app::build_router,
     config::Config,
-    state::{AppState, UnavailableSupervisorClient},
+    state::AppState,
+    supervisor::UnixSupervisorClient,
 };
 use audiodown_storage::Storage;
 use tokio::net::TcpListener;
@@ -23,7 +24,10 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(
         storage,
         semver::Version::parse(env!("CARGO_PKG_VERSION"))?,
-        std::sync::Arc::new(UnavailableSupervisorClient),
+        std::sync::Arc::new(UnixSupervisorClient::new(
+            &config.supervisor_socket,
+            &config.core_token_file,
+        )),
     );
     let app = build_router(state);
     let listener = TcpListener::bind(config.bind).await?;

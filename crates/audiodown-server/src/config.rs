@@ -10,6 +10,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub database_url: String,
     pub supervisor_socket: PathBuf,
+    pub core_token_file: PathBuf,
     pub log_filter: String,
 }
 
@@ -27,6 +28,10 @@ impl Config {
             supervisor_socket: PathBuf::from(env_value(
                 "AUDIODOWN_SUPERVISOR_SOCKET",
                 "/run/audiodown/supervisor.sock",
+            )),
+            core_token_file: PathBuf::from(env_value(
+                "AUDIODOWN_CORE_TOKEN_FILE",
+                "/run/audiodown/core.token",
             )),
             log_filter: env_value("AUDIODOWN_LOG", "info"),
         })

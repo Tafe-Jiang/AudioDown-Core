@@ -67,3 +67,20 @@ async fn exposes_foundation_api_surface() {
         assert!(!serialized.contains("spotify"));
     }
 }
+
+#[tokio::test]
+async fn returns_stable_error_when_supervisor_is_unavailable() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(
+            Request::post("/api/v1/plugins/com.audiodown.virtual.content/start")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["code"], "SUPERVISOR_UNAVAILABLE");
+}
