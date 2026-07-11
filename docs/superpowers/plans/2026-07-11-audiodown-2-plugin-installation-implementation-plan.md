@@ -241,7 +241,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-api && cargo clippy -p audiodown-plugin-api --all-targets -- -D warnings'
+  sh -c 'cargo test -p audiodown-plugin-api && cargo clippy -p audiodown-plugin-api --all-targets -- -D warnings'
 ```
 
 Expected: PASS.
@@ -352,7 +352,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager --test github_source && cargo fmt --all -- --check'
+  sh -c 'cargo test -p audiodown-plugin-manager --test github_source && cargo fmt --all -- --check'
 ```
 
 Expected: PASS.
@@ -537,7 +537,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager --test archive_safety && cargo clippy -p audiodown-plugin-manager --all-targets -- -D warnings'
+  sh -c 'cargo test -p audiodown-plugin-manager --test archive_safety && cargo clippy -p audiodown-plugin-manager --all-targets -- -D warnings'
 ```
 
 Expected: PASS.
@@ -668,7 +668,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager && cargo clippy -p audiodown-plugin-manager --all-targets -- -D warnings'
+  sh -c 'cargo test -p audiodown-plugin-manager && cargo clippy -p audiodown-plugin-manager --all-targets -- -D warnings'
 ```
 
 Expected: PASS.
@@ -788,7 +788,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-storage && cargo clippy -p audiodown-storage --all-targets -- -D warnings'
+  sh -c 'cargo test -p audiodown-storage && cargo clippy -p audiodown-storage --all-targets -- -D warnings'
 ```
 
 Expected: PASS.
@@ -1006,7 +1006,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager --test inspection_service && cargo test -p audiodown-server --test repository_api'
+  sh -c 'cargo test -p audiodown-plugin-manager --test inspection_service && cargo test -p audiodown-server --test repository_api'
 ```
 
 Expected: FAIL because the service and route do not exist.
@@ -1050,7 +1050,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager --test inspection_service && cargo test -p audiodown-server --test repository_api && cargo clippy -p audiodown-plugin-manager --all-targets -- -D warnings && cargo clippy -p audiodown-server --all-targets -- -D warnings'
+  sh -c 'cargo test -p audiodown-plugin-manager --test inspection_service && cargo test -p audiodown-server --test repository_api && cargo clippy -p audiodown-plugin-manager --all-targets -- -D warnings && cargo clippy -p audiodown-server --all-targets -- -D warnings'
 ```
 
 Expected: PASS.
@@ -1254,7 +1254,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-supervisor-protocol && cargo test -p audiodown-supervisor --test protocol && cargo test -p audiodown-server --test supervisor_client'
+  sh -c 'cargo test -p audiodown-supervisor-protocol && cargo test -p audiodown-supervisor --test protocol && cargo test -p audiodown-server --test supervisor_client'
 ```
 
 Expected: PASS.
@@ -1332,7 +1332,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-supervisor --test build_proxy && cargo clippy -p audiodown-supervisor --all-targets -- -D warnings'
+  sh -c 'cargo test -p audiodown-supervisor --test build_proxy && cargo clippy -p audiodown-supervisor --all-targets -- -D warnings'
 ```
 
 Expected: PASS.
@@ -1448,7 +1448,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-supervisor --test prepared_install && cargo test -p audiodown-supervisor --test build_policy && cargo test -p audiodown-supervisor --test install_operation'
+  sh -c 'cargo test -p audiodown-supervisor --test prepared_install && cargo test -p audiodown-supervisor --test build_policy && cargo test -p audiodown-supervisor --test install_operation'
 ```
 
 Expected: FAIL because prepared install, trusted image, builder, and operation
@@ -1556,7 +1556,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-supervisor && cargo clippy -p audiodown-supervisor --all-targets -- -D warnings'
+  sh -c 'cargo test -p audiodown-supervisor && cargo clippy -p audiodown-supervisor --all-targets -- -D warnings'
 ```
 
 Expected: PASS.
@@ -1655,7 +1655,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager --test install_service && cargo test -p audiodown-server --test development_config && cargo test -p audiodown-server --test plugin_install_api'
+  sh -c 'cargo test -p audiodown-plugin-manager --test install_service && cargo test -p audiodown-server --test development_config && cargo test -p audiodown-server --test plugin_install_api'
 ```
 
 Expected: FAIL because the two-phase install service and route are absent.
@@ -1749,7 +1749,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager --test install_service && cargo test -p audiodown-server --test development_config && cargo test -p audiodown-server --test plugin_install_api && cargo test -p audiodown-storage && cargo test -p audiodown-server --test supervisor_client'
+  sh -c 'cargo test -p audiodown-plugin-manager --test install_service && cargo test -p audiodown-server --test development_config && cargo test -p audiodown-server --test plugin_install_api && cargo test -p audiodown-storage && cargo test -p audiodown-server --test supervisor_client'
 ```
 
 Expected: PASS.
@@ -1825,7 +1825,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager --test management_service && cargo test -p audiodown-server --test plugin_management_api && cargo test -p audiodown-supervisor --test remove_policy'
+  sh -c 'cargo test -p audiodown-plugin-manager --test management_service && cargo test -p audiodown-server --test plugin_management_api && cargo test -p audiodown-supervisor --test remove_policy'
 ```
 
 Expected: FAIL because the manager use cases, thin routes, and remove policy are
@@ -1889,7 +1889,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager --test management_service && cargo test -p audiodown-server --test plugin_management_api && cargo test -p audiodown-supervisor && cargo test -p audiodown-server'
+  sh -c 'cargo test -p audiodown-plugin-manager --test management_service && cargo test -p audiodown-server --test plugin_management_api && cargo test -p audiodown-supervisor && cargo test -p audiodown-server'
 ```
 
 Expected: PASS.
@@ -1943,7 +1943,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager --test lifecycle_service && cargo test -p audiodown-server --test lifecycle_reconciler'
+  sh -c 'cargo test -p audiodown-plugin-manager --test lifecycle_service && cargo test -p audiodown-server --test lifecycle_reconciler'
 ```
 
 Expected: FAIL because the reconciler is missing.
@@ -1983,7 +1983,7 @@ Run:
 
 ```bash
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager --test lifecycle_service && cargo test -p audiodown-server --test lifecycle_reconciler && cargo test --workspace'
+  sh -c 'cargo test -p audiodown-plugin-manager --test lifecycle_service && cargo test -p audiodown-server --test lifecycle_reconciler && cargo test --workspace'
 ```
 
 Expected: PASS.
@@ -2014,7 +2014,7 @@ Run:
 ```bash
 git status --short --branch
 docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
-  sh -lc 'cargo test -p audiodown-plugin-manager --test lifecycle_service && cargo test -p audiodown-server --test lifecycle_reconciler'
+  sh -c 'cargo test -p audiodown-plugin-manager --test lifecycle_service && cargo test -p audiodown-server --test lifecycle_reconciler'
 ```
 
 Expected: clean worktree and PASS through phase-two Task 14.

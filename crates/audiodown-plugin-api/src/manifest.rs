@@ -16,6 +16,8 @@ pub struct PluginManifest {
     pub platform: PlatformSpec,
     pub capabilities: Vec<String>,
     pub network: NetworkPolicy,
+    #[serde(default)]
+    pub build: BuildSpec,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,4 +58,19 @@ pub struct PlatformSpec {
 pub struct NetworkPolicy {
     #[serde(rename = "allowedHosts")]
     pub allowed_hosts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BuildSpec {
+    #[serde(default)]
+    pub npm_lifecycle_scripts: LifecycleScriptPolicy,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleScriptPolicy {
+    #[serde(default)]
+    pub required: bool,
+    pub reason: Option<String>,
 }
