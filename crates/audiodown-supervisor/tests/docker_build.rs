@@ -8,6 +8,7 @@ use audiodown_supervisor::{
     },
     trusted_images,
 };
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -231,9 +232,13 @@ fn trusted_inputs_and_managed_image_commit_are_deterministic() {
     assert_eq!(trusted.runtime_asset_hash.len(), 64);
     assert_ne!(trusted.builder_asset_hash, trusted.runtime_asset_hash);
     assert!(String::from_utf8_lossy(&trusted.builder_context).contains("node22-build-runner.js"));
-    assert!(
-        String::from_utf8_lossy(&trusted.runtime_context).contains("plugin-sdk/node/src/index.js")
+    let runtime_entries = parse_tar(&trusted.runtime_context);
+    assert_eq!(
+        runtime_entries["plugin-sdk/node/src/content.js"].contents,
+        include_bytes!("../../../plugin-sdk/node/src/content.js")
     );
+    assert!(runtime_entries.contains_key("plugin-sdk/node/src/index.js"));
+    assert_eq!(trusted.sdk_hash, complete_embedded_sdk_hash());
 
     let operation_id = Uuid::parse_str(OPERATION_ID).unwrap();
     let plan = managed_image_plan(ManagedImageInput {
@@ -255,6 +260,51 @@ fn trusted_inputs_and_managed_image_commit_are_deterministic() {
         trusted.base_image_digest
     );
     assert_eq!(plan.labels["io.audiodown.sdk-hash"], trusted.sdk_hash);
+}
+
+fn complete_embedded_sdk_hash() -> String {
+    let files: [(&str, &[u8]); 8] = [
+        (
+            "package-lock.json",
+            include_bytes!("../../../plugin-sdk/node/package-lock.json"),
+        ),
+        (
+            "package.json",
+            include_bytes!("../../../plugin-sdk/node/package.json"),
+        ),
+        (
+            "src/content.js",
+            include_bytes!("../../../plugin-sdk/node/src/content.js"),
+        ),
+        (
+            "src/index.js",
+            include_bytes!("../../../plugin-sdk/node/src/index.js"),
+        ),
+        (
+            "src/logger.js",
+            include_bytes!("../../../plugin-sdk/node/src/logger.js"),
+        ),
+        (
+            "src/rpc.js",
+            include_bytes!("../../../plugin-sdk/node/src/rpc.js"),
+        ),
+        (
+            "test/content.test.js",
+            include_bytes!("../../../plugin-sdk/node/test/content.test.js"),
+        ),
+        (
+            "test/sdk.test.js",
+            include_bytes!("../../../plugin-sdk/node/test/sdk.test.js"),
+        ),
+    ];
+    let mut hasher = Sha256::new();
+    for (relative, contents) in files {
+        hasher.update((relative.len() as u64).to_be_bytes());
+        hasher.update(relative.as_bytes());
+        hasher.update((contents.len() as u64).to_be_bytes());
+        hasher.update(contents);
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 #[derive(Debug)]

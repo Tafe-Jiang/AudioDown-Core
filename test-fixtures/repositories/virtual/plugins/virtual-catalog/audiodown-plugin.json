@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0",
-  "id": "com.audiodown.virtual.content",
-  "name": "Virtual Content",
+  "id": "com.audiodown.catalog.content",
+  "name": "Virtual Catalog Content",
   "version": "1.0.0",
   "type": "content",
   "runtime": {
@@ -14,8 +14,8 @@
     "core": ">=1.0 <2.0"
   },
   "platform": {
-    "id": "virtual",
-    "name": "Virtual"
+    "id": "catalog",
+    "name": "Catalog"
   },
   "capabilities": [
     "system.health",

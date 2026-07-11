@@ -5,6 +5,8 @@ const repositoryUrl =
 const repositoryId = "example.plugins";
 const commitSha = "0123456789abcdef0123456789abcdef01234567";
 const contentPluginId = "com.audiodown.virtual.content";
+const backupPluginId = "com.audiodown.virtual.content-backup";
+const catalogPluginId = "com.audiodown.catalog.content";
 const buildRiskPluginId = "com.audiodown.virtual.build-risk";
 const buildRiskPluginName = "Virtual Build Risk";
 const updatedPriority = 37;
@@ -109,12 +111,22 @@ test("installs and manages the build-risk plugin through the real Core UI", asyn
     sourceUrl: repositoryUrl,
     commitSha,
   });
-  expect(inspection.plugins).toHaveLength(2);
+  expect(inspection.plugins).toHaveLength(4);
   expect(inspection.plugins).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
         pluginId: contentPluginId,
         name: "Virtual Content",
+        requiresLifecycleScriptGrant: false,
+      }),
+      expect.objectContaining({
+        pluginId: backupPluginId,
+        name: "Virtual Content Backup",
+        requiresLifecycleScriptGrant: false,
+      }),
+      expect.objectContaining({
+        pluginId: catalogPluginId,
+        name: "Virtual Catalog Content",
         requiresLifecycleScriptGrant: false,
       }),
       expect.objectContaining({
@@ -132,7 +144,19 @@ test("installs and manages the build-risk plugin through the real Core UI", asyn
     repositoryDialog.getByText(commitSha.slice(0, 7), { exact: true }),
   ).toBeVisible();
   await expect(
-    repositoryDialog.getByRole("button", { name: /Virtual Content/ }),
+    repositoryDialog.getByRole("button", {
+      name: /^Virtual Content content 1\.0\.0$/,
+    }),
+  ).toBeVisible();
+  await expect(
+    repositoryDialog.getByRole("button", {
+      name: /^Virtual Content Backup content 1\.0\.0$/,
+    }),
+  ).toBeVisible();
+  await expect(
+    repositoryDialog.getByRole("button", {
+      name: /^Virtual Catalog Content content 1\.0\.0$/,
+    }),
   ).toBeVisible();
   const buildRiskPlugin = repositoryDialog.getByRole("button", {
     name: /Virtual Build Risk/,

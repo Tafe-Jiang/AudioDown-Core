@@ -487,6 +487,10 @@ fn embedded_sdk_files() -> Vec<(&'static str, &'static [u8])> {
             include_bytes!("../../../plugin-sdk/node/package.json"),
         ),
         (
+            "src/content.js",
+            include_bytes!("../../../plugin-sdk/node/src/content.js"),
+        ),
+        (
             "src/index.js",
             include_bytes!("../../../plugin-sdk/node/src/index.js"),
         ),
@@ -497,6 +501,10 @@ fn embedded_sdk_files() -> Vec<(&'static str, &'static [u8])> {
         (
             "src/rpc.js",
             include_bytes!("../../../plugin-sdk/node/src/rpc.js"),
+        ),
+        (
+            "test/content.test.js",
+            include_bytes!("../../../plugin-sdk/node/test/content.test.js"),
         ),
         (
             "test/sdk.test.js",

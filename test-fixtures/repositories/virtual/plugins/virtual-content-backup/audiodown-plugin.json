@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0",
-  "id": "com.audiodown.virtual.content",
-  "name": "Virtual Content",
+  "id": "com.audiodown.virtual.content-backup",
+  "name": "Virtual Content Backup",
   "version": "1.0.0",
   "type": "content",
   "runtime": {

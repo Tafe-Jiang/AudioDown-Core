@@ -21,6 +21,10 @@
 
 This plan does not add credentials, Cookie handling, HTTP proxying, download planning, download resolution, real file downloads, real platforms, real domains, migration claims, diagnostics, automatic updates, or non-Node runtimes.
 
+## Progress Snapshot
+
+As of 2026-07-12, Tasks 1 through 10 are complete and verified. Tasks 11 through 14 remain pending. The current `main` push is an explicit intermediate checkpoint requested by the user; phase three is not complete until Task 14 and the clean-checkout verification pass.
+
 ## Locked Decisions
 
 - The only phase-three plugin methods are `content.search`, `content.discover`, `content.categories`, `content.album.get`, and `content.tracks.list`.
@@ -492,8 +496,11 @@ git commit -m "阶段3：开放内容聚合接口" \
 - Create: `test-fixtures/repositories/virtual/plugins/virtual-content-backup/`
 - Create: `test-fixtures/repositories/virtual/plugins/virtual-catalog/`
 - Modify: `test-fixtures/repositories/virtual/README.md`
+- Modify: `crates/audiodown-supervisor/src/docker_build.rs`
+- Modify: `crates/audiodown-supervisor/tests/docker_build.rs`
 - Modify: `tests/plugin-repository-smoke.sh`
 - Create: `tests/virtual-content-contract.sh`
+- Modify: `web/tests/plugin-installation-live.spec.ts`
 
 - [ ] **Step 1: Write failing fixture contract test**
 
@@ -511,17 +518,26 @@ Expected: FAIL because the phase-three virtual handlers and fallback fixtures do
 
 Add a primary and backup plugin for one virtual platform plus one plugin for a second virtual platform. Use only local deterministic data. Add test-only query switches for timeout/retryable/hard failures without network access.
 
+Keep the Supervisor's trusted runtime SDK context synchronized with the complete phase-three Node SDK file set. The repository smoke and existing live installation test must accept the expanded virtual repository index without weakening their lifecycle or security assertions.
+
 - [ ] **Step 4: Run fixture and repository checks**
 
 ```bash
 ./tests/virtual-content-contract.sh
 ./tests/plugin-repository-smoke.sh
+cargo test -p audiodown-supervisor --test docker_build
+cargo clippy -p audiodown-supervisor --all-targets -- -D warnings
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add test-fixtures/repositories/virtual tests
+git add \
+  crates/audiodown-supervisor \
+  docs/superpowers/plans/2026-07-12-audiodown-3-content-aggregation-implementation-plan.md \
+  test-fixtures/repositories/virtual \
+  tests \
+  web/tests/plugin-installation-live.spec.ts
 git commit -m "阶段3：添加虚拟内容插件集" \
   -m "用确定性虚拟数据覆盖聚合、分页、去重和失败回退场景。"
 ```

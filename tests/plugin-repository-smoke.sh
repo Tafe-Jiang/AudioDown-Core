@@ -7,6 +7,8 @@ cd "$root_dir"
 commit_sha="0123456789abcdef0123456789abcdef01234567"
 repository_url="https://github.com/example-owner/example-repository"
 content_plugin_id="com.audiodown.virtual.content"
+backup_plugin_id="com.audiodown.virtual.content-backup"
+catalog_plugin_id="com.audiodown.catalog.content"
 risk_plugin_id="com.audiodown.virtual.build-risk"
 fixture_root="$root_dir/test-fixtures/repositories/virtual"
 fixture_dev_token="phase-two-fixture-token-$$"
@@ -55,7 +57,11 @@ cleanup() {
   status=$?
   if [ "${AUDIODOWN_KEEP_CONTAINERS_ON_FAILURE:-0}" != "1" ] || [ "$status" -eq 0 ]; then
     docker rm -f "$mock_name" >/dev/null 2>&1 || true
-    for plugin_id in "$content_plugin_id" "$risk_plugin_id"; do
+    for plugin_id in \
+      "$content_plugin_id" \
+      "$backup_plugin_id" \
+      "$catalog_plugin_id" \
+      "$risk_plugin_id"; do
       docker ps -aq \
         --filter "label=io.audiodown.managed=true" \
         --filter "label=io.audiodown.plugin-id=$plugin_id" \
@@ -97,13 +103,21 @@ const expected = new Map([
     id: "com.audiodown.virtual.content",
     lifecycle: false,
   }],
+  ["plugins/virtual-content-backup", {
+    id: "com.audiodown.virtual.content-backup",
+    lifecycle: false,
+  }],
+  ["plugins/virtual-catalog", {
+    id: "com.audiodown.catalog.content",
+    lifecycle: false,
+  }],
   ["plugins/virtual-build-risk", {
     id: "com.audiodown.virtual.build-risk",
     lifecycle: true,
   }],
 ]);
 if (repository.plugins.length !== expected.size) {
-  throw new Error("repository fixture must contain exactly two plugins");
+  throw new Error("repository fixture must contain exactly four plugins");
 }
 
 for (const pluginReference of repository.plugins) {
@@ -148,7 +162,11 @@ for (const pluginReference of repository.plugins) {
 }
 NODE
 
-for plugin_path in virtual-content virtual-build-risk; do
+for plugin_path in \
+  virtual-content \
+  virtual-content-backup \
+  virtual-catalog \
+  virtual-build-risk; do
   docker run --rm \
     -v "$fixture_root/plugins/$plugin_path:/fixture:ro" \
     node:22-bookworm-slim \
@@ -243,9 +261,21 @@ curl --fail --silent --show-error \
   >"$inspection_file"
 
 snapshot_id="$(
-  node - "$inspection_file" "$commit_sha" "$content_plugin_id" "$risk_plugin_id" <<'NODE'
+  node - "$inspection_file" \
+    "$commit_sha" \
+    "$content_plugin_id" \
+    "$backup_plugin_id" \
+    "$catalog_plugin_id" \
+    "$risk_plugin_id" <<'NODE'
 const fs = require("node:fs");
-const [file, commitSha, contentPluginId, riskPluginId] = process.argv.slice(2);
+const [
+  file,
+  commitSha,
+  contentPluginId,
+  backupPluginId,
+  catalogPluginId,
+  riskPluginId,
+] = process.argv.slice(2);
 const inspection = JSON.parse(fs.readFileSync(file, "utf8"));
 if (
   inspection.repository.id !== "example.plugins" ||
@@ -255,6 +285,16 @@ if (
   !inspection.plugins.some(
     (plugin) =>
       plugin.pluginId === contentPluginId &&
+      plugin.requiresLifecycleScriptGrant === false,
+  ) ||
+  !inspection.plugins.some(
+    (plugin) =>
+      plugin.pluginId === backupPluginId &&
+      plugin.requiresLifecycleScriptGrant === false,
+  ) ||
+  !inspection.plugins.some(
+    (plugin) =>
+      plugin.pluginId === catalogPluginId &&
       plugin.requiresLifecycleScriptGrant === false,
   ) ||
   !inspection.plugins.some(
@@ -329,6 +369,23 @@ const [file, pluginId] = process.argv.slice(2);
 const state = JSON.parse(fs.readFileSync(file, "utf8"));
 if (state.pluginId !== pluginId || state.status !== "healthy") {
   throw new Error("content plugin did not complete its handshake");
+}
+NODE
+
+search_file="$temporary_dir/content-search.json"
+curl --fail --silent --show-error \
+  "http://127.0.0.1:$host_port/api/v1/search?q=fixture&pluginId=$content_plugin_id" \
+  >"$search_file"
+node - "$search_file" "$content_plugin_id" <<'NODE'
+const fs = require("node:fs");
+const [file, pluginId] = process.argv.slice(2);
+const search = JSON.parse(fs.readFileSync(file, "utf8"));
+if (
+  search.items.length !== 1 ||
+  search.items[0].source.pluginId !== pluginId ||
+  search.items[0].item.resourceId !== "virtual-album-1"
+) {
+  throw new Error("installed content plugin did not serve search through Core");
 }
 NODE
 
