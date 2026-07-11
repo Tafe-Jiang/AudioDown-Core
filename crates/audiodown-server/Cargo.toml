@@ -11,6 +11,7 @@ async-trait.workspace = true
 audiodown-domain = { path = "../audiodown-domain" }
 audiodown-logging = { path = "../audiodown-logging" }
 audiodown-plugin-api = { path = "../audiodown-plugin-api" }
+audiodown-plugin-manager = { path = "../audiodown-plugin-manager" }
 audiodown-storage = { path = "../audiodown-storage" }
 axum.workspace = true
 chrono.workspace = true
@@ -24,3 +25,8 @@ tokio.workspace = true
 tower.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true
+tar.workspace = true
+tempfile = "3.20"

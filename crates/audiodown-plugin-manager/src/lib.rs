@@ -8,6 +8,7 @@ use thiserror::Error;
 pub mod archive;
 pub mod github;
 mod package;
+pub mod service;
 pub mod staging;
 pub mod validation;
 
@@ -92,4 +93,6 @@ pub enum PluginManagerError {
     SnapshotNotFound,
     #[error("lifecycle-script risk grant does not match the staged plugin")]
     RiskGrantMismatch,
+    #[error("plugin state store is unavailable")]
+    PluginStateUnavailable,
 }

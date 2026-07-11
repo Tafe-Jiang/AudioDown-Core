@@ -4,7 +4,7 @@ use axum::{
 };
 
 use crate::{
-    routes::{health, logs, plugins, system},
+    routes::{health, logs, plugins, repositories, system},
     state::AppState,
     web,
 };
@@ -13,6 +13,7 @@ pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         .route("/system", get(system::system))
         .route("/plugins", get(plugins::list))
+        .route("/plugin-repositories/inspect", post(repositories::inspect))
         .route("/plugins/{plugin_id}/start", post(plugins::start))
         .route("/plugins/{plugin_id}/stop", post(plugins::stop))
         .route("/plugins/{plugin_id}/runtime", get(plugins::runtime))

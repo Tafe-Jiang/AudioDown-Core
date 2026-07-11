@@ -1,6 +1,7 @@
 pub mod health;
 pub mod logs;
 pub mod plugins;
+pub mod repositories;
 pub mod system;
 
 use axum::{http::StatusCode, Json};

@@ -11,6 +11,8 @@ services:
     environment:
       AUDIODOWN_DEV_MODE: "${AUDIODOWN_DEV_MODE:-0}"
       AUDIODOWN_DEV_TOKEN: "${AUDIODOWN_DEV_TOKEN:-}"
+      AUDIODOWN_GITHUB_API_BASE: "${AUDIODOWN_GITHUB_API_BASE:-https://api.github.com}"
+      AUDIODOWN_GITHUB_ARCHIVE_BASE: "${AUDIODOWN_GITHUB_ARCHIVE_BASE:-https://codeload.github.com}"
     ports:
       - "${AUDIODOWN_PORT:-18080}:18080"
     volumes:

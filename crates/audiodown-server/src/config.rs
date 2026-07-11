@@ -4,6 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
+pub const DEFAULT_GITHUB_ARCHIVE_BASE: &str = "https://codeload.github.com";
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind: SocketAddr,
@@ -14,6 +17,8 @@ pub struct Config {
     pub log_filter: String,
     pub dev_mode: bool,
     pub dev_token: Option<String>,
+    pub github_api_base: String,
+    pub github_archive_base: String,
 }
 
 impl Config {
@@ -22,6 +27,16 @@ impl Config {
         let data_dir = PathBuf::from(env_value("AUDIODOWN_DATA_DIR", "/data"));
         let database_url =
             env::var("AUDIODOWN_DATABASE_URL").unwrap_or_else(|_| default_database_url(&data_dir));
+        let dev_mode = env_flag("AUDIODOWN_DEV_MODE");
+        let github_api_base = env_value("AUDIODOWN_GITHUB_API_BASE", DEFAULT_GITHUB_API_BASE);
+        let github_archive_base =
+            env_value("AUDIODOWN_GITHUB_ARCHIVE_BASE", DEFAULT_GITHUB_ARCHIVE_BASE);
+        if !dev_mode
+            && (github_api_base != DEFAULT_GITHUB_API_BASE
+                || github_archive_base != DEFAULT_GITHUB_ARCHIVE_BASE)
+        {
+            anyhow::bail!("custom GitHub service bases require AUDIODOWN_DEV_MODE=1");
+        }
 
         Ok(Self {
             bind,
@@ -36,10 +51,12 @@ impl Config {
                 "/run/audiodown/core.token",
             )),
             log_filter: env_value("AUDIODOWN_LOG", "info"),
-            dev_mode: env_flag("AUDIODOWN_DEV_MODE"),
+            dev_mode,
             dev_token: env::var("AUDIODOWN_DEV_TOKEN")
                 .ok()
                 .filter(|value| !value.is_empty()),
+            github_api_base,
+            github_archive_base,
         })
     }
 }

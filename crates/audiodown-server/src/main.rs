@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
+use audiodown_plugin_manager::{github::GitHubClient, service::PluginManagerService};
 use audiodown_server::{
-    app::build_router, config::Config, state::AppState, supervisor::UnixSupervisorClient,
+    app::build_router, config::Config, plugin_manager_adapters::SqlitePluginManagerStore,
+    state::AppState, supervisor::UnixSupervisorClient,
 };
 use audiodown_storage::Storage;
 use tokio::net::TcpListener;
@@ -18,6 +20,17 @@ async fn main() -> anyhow::Result<()> {
     let storage = Storage::connect(&config.database_url).await?;
     storage.migrate().await?;
 
+    let repository_source = std::sync::Arc::new(GitHubClient::new(
+        &config.github_api_base,
+        &config.github_archive_base,
+    )?);
+    let plugin_manager = std::sync::Arc::new(PluginManagerService::new(
+        std::sync::Arc::new(SqlitePluginManagerStore::new(storage.clone())),
+        repository_source,
+        config.data_dir.join("plugins"),
+        semver::Version::parse(env!("CARGO_PKG_VERSION"))?,
+        semver::Version::new(1, 0, 0),
+    ));
     let state = AppState::new(
         storage,
         semver::Version::parse(env!("CARGO_PKG_VERSION"))?,
@@ -26,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
             &config.core_token_file,
         )),
     )
+    .with_plugin_manager(plugin_manager)
     .with_development(config.dev_mode, config.dev_token);
     let app = build_router(state);
     let listener = TcpListener::bind(config.bind).await?;

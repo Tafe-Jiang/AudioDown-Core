@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
+use audiodown_plugin_manager::service::PluginManagerService;
 use audiodown_storage::Storage;
 use semver::Version;
+
+use crate::plugin_manager_adapters::{UnavailablePluginStateStore, UnavailableRepositorySource};
 
 pub use crate::supervisor::{
     SupervisorClient, SupervisorError, SupervisorHealth, UnavailableSupervisorClient,
@@ -12,6 +15,7 @@ pub struct AppState {
     pub storage: Storage,
     pub core_version: Version,
     pub supervisor: Arc<dyn SupervisorClient>,
+    pub plugin_manager: Arc<PluginManagerService>,
     pub development: DevelopmentConfig,
 }
 
@@ -21,12 +25,25 @@ impl AppState {
         core_version: Version,
         supervisor: Arc<dyn SupervisorClient>,
     ) -> Self {
+        let plugin_manager = Arc::new(PluginManagerService::new(
+            Arc::new(UnavailablePluginStateStore),
+            Arc::new(UnavailableRepositorySource),
+            std::env::temp_dir().join("audiodown-unavailable-plugin-manager"),
+            core_version.clone(),
+            Version::new(1, 0, 0),
+        ));
         Self {
             storage,
             core_version,
             supervisor,
+            plugin_manager,
             development: DevelopmentConfig::default(),
         }
+    }
+
+    pub fn with_plugin_manager(mut self, plugin_manager: Arc<PluginManagerService>) -> Self {
+        self.plugin_manager = plugin_manager;
+        self
     }
 
     pub fn with_development(mut self, enabled: bool, token: Option<String>) -> Self {
