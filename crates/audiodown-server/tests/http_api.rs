@@ -87,7 +87,7 @@ async fn exposes_foundation_api_surface() {
     for uri in ["/api/v1/discover", "/api/v1/search?q=test"] {
         let (status, empty_state) = get_json(app.clone(), uri).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(empty_state["reason"], "NO_CONTENT_PLUGINS");
+        assert_eq!(empty_state["emptyState"]["reason"], "NO_CONTENT_PLUGINS");
         let serialized = empty_state.to_string().to_ascii_lowercase();
         assert!(!serialized.contains("hardcoded-platform-label"));
     }

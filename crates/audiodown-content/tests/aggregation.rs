@@ -5,9 +5,10 @@ use std::{
 
 use async_trait::async_trait;
 use audiodown_content::{
-    ContentAggregationService, ContentCandidate, ContentFailure, ContentFilters,
-    ContentInvokeError, ContentPluginInvoker, ContentRouteKind, ContentRoutingStore,
-    DiscoverAggregationInput, SearchAggregationInput,
+    encode_cursor, ContentAggregationService, ContentCandidate, ContentCursorBinding,
+    ContentCursorOperation, ContentFailure, ContentFilters, ContentInvokeError,
+    ContentPluginInvoker, ContentRouteKind, ContentRoutingStore, DiscoverAggregationInput,
+    SearchAggregationInput, SourceCursor,
 };
 use audiodown_domain::plugin::PluginId;
 use audiodown_plugin_api::{
@@ -47,7 +48,7 @@ async fn falls_back_on_retryable_first_page_failure_and_keeps_platform_order() {
             query: "virtual".to_string(),
             limit: 20,
             filters: ContentFilters::default(),
-            first_page: true,
+            cursor: None,
         })
         .await
         .unwrap();
@@ -74,7 +75,7 @@ async fn falls_back_on_retryable_first_page_failure_and_keeps_platform_order() {
 
 #[tokio::test]
 async fn explicit_plugin_and_later_pages_never_fall_back() {
-    for (explicit, first_page) in [(true, true), (false, false)] {
+    for explicit in [true, false] {
         let primary = candidate("virtual", "primary", 100, true);
         let backup = candidate("virtual", "backup", 10, false);
         let store = Arc::new(FakeStore::new(vec![primary.clone(), backup]));
@@ -84,17 +85,34 @@ async fn explicit_plugin_and_later_pages_never_fall_back() {
             Err(ContentInvokeError::Unavailable),
         );
         let service = ContentAggregationService::new(store, invoker.clone());
+        let filters = ContentFilters {
+            platform_id: None,
+            plugin_id: explicit.then_some(primary.plugin_id.clone()),
+        };
+        let cursor = (!explicit).then(|| {
+            encode_cursor(
+                &ContentCursorBinding {
+                    operation: ContentCursorOperation::Search,
+                    query: Some("virtual".to_string()),
+                    filters: filters.clone(),
+                },
+                &[SourceCursor {
+                    platform_id: primary.platform_id.clone(),
+                    plugin_id: primary.plugin_id.clone(),
+                    cursor: "plugin-page-2".to_string(),
+                }],
+            )
+            .unwrap()
+            .unwrap()
+        });
 
         let result = service
             .search(SearchAggregationInput {
                 request_id: "request-no-fallback".to_string(),
                 query: "virtual".to_string(),
                 limit: 20,
-                filters: ContentFilters {
-                    platform_id: None,
-                    plugin_id: explicit.then_some(primary.plugin_id),
-                },
-                first_page,
+                filters,
+                cursor,
             })
             .await
             .unwrap();
@@ -181,7 +199,7 @@ async fn aggregates_discover_sections_with_trusted_sources() {
             request_id: "discover-request".to_string(),
             limit: 20,
             filters: ContentFilters::default(),
-            first_page: true,
+            cursor: None,
         })
         .await
         .unwrap();
@@ -199,7 +217,7 @@ fn search_input() -> SearchAggregationInput {
         query: "virtual".to_string(),
         limit: 20,
         filters: ContentFilters::default(),
-        first_page: true,
+        cursor: None,
     }
 }
 

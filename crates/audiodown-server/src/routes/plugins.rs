@@ -6,7 +6,7 @@ use audiodown_plugin_manager::service::{
 };
 use audiodown_storage::PluginRecord;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -46,19 +46,6 @@ pub struct PluginItem {
     pub commit_sha: String,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EmptyStateResponse {
-    pub reason: &'static str,
-    pub title: &'static str,
-    pub action_label: &'static str,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SearchQuery {
-    pub q: Option<String>,
-}
-
 pub async fn list(State(state): State<AppState>) -> ApiResult<PluginListResponse> {
     let records = state
         .storage
@@ -68,15 +55,6 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<PluginListResponse
         .map_err(internal_error)?;
     let items = records.into_iter().map(plugin_item_from_storage).collect();
     Ok(Json(PluginListResponse { items }))
-}
-
-pub async fn discover() -> Json<EmptyStateResponse> {
-    Json(empty_state())
-}
-
-pub async fn search(Query(query): Query<SearchQuery>) -> Json<EmptyStateResponse> {
-    let _ = query.q;
-    Json(empty_state())
 }
 
 pub async fn start(
@@ -334,14 +312,6 @@ fn install_error(error: InstallError) -> (StatusCode, Json<ApiError>) {
             "PLUGIN_INSTALL_FAILED",
             "Plugin installation failed",
         ),
-    }
-}
-
-fn empty_state() -> EmptyStateResponse {
-    EmptyStateResponse {
-        reason: "NO_CONTENT_PLUGINS",
-        title: "尚未安装内容插件",
-        action_label: "添加 GitHub 插件仓库",
     }
 }
 

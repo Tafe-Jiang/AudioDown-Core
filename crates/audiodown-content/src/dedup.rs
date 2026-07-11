@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use audiodown_plugin_api::content::{ContentItem, ContentResourceType};
 
-use crate::{SourcedContentItem, SourcedDiscoverSection};
+use crate::{SourcedCategoryItem, SourcedContentItem, SourcedDiscoverSection};
 
 pub fn deduplicate_items(items: Vec<SourcedContentItem>) -> Vec<SourcedContentItem> {
     let mut seen = HashSet::new();
@@ -20,6 +20,20 @@ pub fn deduplicate_sections(sections: &mut [SourcedDiscoverSection]) {
             .items
             .retain(|item| keep_item(item, &mut seen));
     }
+}
+
+pub fn deduplicate_categories(items: Vec<SourcedCategoryItem>) -> Vec<SourcedCategoryItem> {
+    let mut seen = HashSet::new();
+    items
+        .into_iter()
+        .filter(|item| {
+            item.item
+                .canonical_id
+                .as_deref()
+                .filter(|canonical_id| !canonical_id.is_empty())
+                .is_none_or(|canonical_id| seen.insert(canonical_id.to_string()))
+        })
+        .collect()
 }
 
 fn keep_item(item: &ContentItem, seen: &mut HashSet<(u8, String)>) -> bool {

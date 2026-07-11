@@ -5,6 +5,7 @@ use audiodown_storage::Storage;
 use secrecy::SecretString;
 use semver::Version;
 
+use crate::content_adapters::ContentApiService;
 use crate::plugin_manager_adapters::{UnavailablePluginStateStore, UnavailableRepositorySource};
 
 pub use crate::supervisor::{
@@ -17,6 +18,7 @@ pub struct AppState {
     pub core_version: Version,
     pub supervisor: Arc<dyn SupervisorClient>,
     pub plugin_manager: Arc<PluginManagerService>,
+    pub content: Arc<ContentApiService>,
     pub development: DevelopmentConfig,
 }
 
@@ -33,16 +35,25 @@ impl AppState {
             core_version.clone(),
             Version::new(1, 0, 0),
         ));
+        let content = Arc::new(ContentApiService::new(
+            storage.clone(),
+            Arc::clone(&plugin_manager),
+        ));
         Self {
             storage,
             core_version,
             supervisor,
             plugin_manager,
+            content,
             development: DevelopmentConfig::default(),
         }
     }
 
     pub fn with_plugin_manager(mut self, plugin_manager: Arc<PluginManagerService>) -> Self {
+        self.content = Arc::new(ContentApiService::new(
+            self.storage.clone(),
+            Arc::clone(&plugin_manager),
+        ));
         self.plugin_manager = plugin_manager;
         self
     }

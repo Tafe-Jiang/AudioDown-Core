@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+audiodown-content.workspace = true
 audiodown-domain = { path = "../audiodown-domain" }
 audiodown-logging = { path = "../audiodown-logging" }
 audiodown-plugin-api = { path = "../audiodown-plugin-api" }

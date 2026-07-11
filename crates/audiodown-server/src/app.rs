@@ -1,10 +1,10 @@
 use axum::{
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 
 use crate::{
-    routes::{health, logs, plugins, repositories, system},
+    routes::{content, health, logs, plugins, repositories, system},
     state::AppState,
     web,
 };
@@ -28,8 +28,19 @@ pub fn build_router(state: AppState) -> Router {
             post(plugins::register_fixture),
         )
         .route("/logs", get(logs::list))
-        .route("/discover", get(plugins::discover))
-        .route("/search", get(plugins::search))
+        .route("/search", get(content::search))
+        .route("/discover", get(content::discover))
+        .route("/categories", get(content::categories))
+        .route("/albums/get", post(content::album_get))
+        .route("/tracks/list", post(content::tracks_list))
+        .route(
+            "/plugins/{plugin_id}/content-settings",
+            patch(content::update_settings),
+        )
+        .route(
+            "/platforms/{platform_id}/default-content-plugin",
+            put(content::set_default),
+        )
         .fallback(crate::routes::not_found);
 
     Router::new()

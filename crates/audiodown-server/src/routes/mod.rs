@@ -1,3 +1,4 @@
+pub mod content;
 pub mod health;
 pub mod logs;
 pub mod plugins;

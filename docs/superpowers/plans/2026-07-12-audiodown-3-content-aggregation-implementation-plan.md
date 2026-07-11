@@ -434,6 +434,10 @@ git commit -m "阶段3：添加不透明分页与结果去重" \
 ### Task 9: Expose Content APIs and Unified Call Logs
 
 **Files:**
+- Modify: `crates/audiodown-content/src/dedup.rs`
+- Modify: `crates/audiodown-content/src/lib.rs`
+- Modify: `crates/audiodown-content/src/router.rs`
+- Modify: `crates/audiodown-content/tests/aggregation.rs`
 - Create: `crates/audiodown-server/src/content_adapters.rs`
 - Create: `crates/audiodown-server/src/routes/content.rs`
 - Modify: `crates/audiodown-server/src/routes/mod.rs`
@@ -444,6 +448,8 @@ git commit -m "阶段3：添加不透明分页与结果去重" \
 - Modify: `crates/audiodown-server/src/routes/plugins.rs`
 - Create: `crates/audiodown-server/tests/content_api.rs`
 - Modify: `crates/audiodown-server/tests/http_api.rs`
+
+**Plan clarification:** Task 8 establishes the bounded cursor and deduplication primitives. Task 9 connects those primitives to the aggregation service, adds the already-locked categories aggregation path, and then keeps Axum as a thin adapter. These content-crate changes are required by the architecture above and do not add a new capability or phase.
 
 - [ ] **Step 1: Write failing HTTP tests**
 

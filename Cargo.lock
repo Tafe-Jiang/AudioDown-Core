@@ -151,6 +151,7 @@ version = "1.0.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "audiodown-content",
  "audiodown-domain",
  "audiodown-logging",
  "audiodown-plugin-api",

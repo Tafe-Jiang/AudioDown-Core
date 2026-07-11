@@ -7,10 +7,12 @@ pub use cursor::{
     SourceCursor, MAX_CURSOR_DECODED_BYTES, MAX_CURSOR_ENCODED_BYTES, MAX_CURSOR_SOURCES,
     MAX_SOURCE_CURSOR_BYTES,
 };
-pub use dedup::{deduplicate_items, deduplicate_sections};
+pub use dedup::{deduplicate_categories, deduplicate_items, deduplicate_sections};
 pub use router::{
-    select_candidates, AggregatedDiscoverResult, AggregatedSearchResult, ContentAggregationService,
+    select_candidates, AggregatedCategoriesResult, AggregatedDiscoverResult,
+    AggregatedSearchResult, CategoriesAggregationInput, ContentAggregationService,
     ContentCandidate, ContentFailure, ContentFilters, ContentInvokeError, ContentPluginInvoker,
     ContentRouteKind, ContentRoutingStore, ContentServiceError, ContentSource,
-    DiscoverAggregationInput, SearchAggregationInput, SourcedContentItem, SourcedDiscoverSection,
+    DiscoverAggregationInput, SearchAggregationInput, SourcedCategoryItem, SourcedContentItem,
+    SourcedDiscoverSection,
 };
