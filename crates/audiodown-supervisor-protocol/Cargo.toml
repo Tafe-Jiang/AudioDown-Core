@@ -1,22 +1,14 @@
 [package]
-name = "audiodown-supervisor"
+name = "audiodown-supervisor-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-anyhow.workspace = true
 audiodown-domain = { path = "../audiodown-domain" }
-audiodown-plugin-api = { path = "../audiodown-plugin-api" }
-audiodown-supervisor-protocol.workspace = true
-bollard.workspace = true
 chrono.workspace = true
-futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
-tracing.workspace = true
 uuid.workspace = true

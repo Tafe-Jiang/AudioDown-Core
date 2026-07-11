@@ -4,9 +4,18 @@ use std::{
 };
 
 use async_trait::async_trait;
-use audiodown_domain::plugin::{PluginId, PluginStatus};
+use audiodown_domain::plugin::PluginId;
+pub use audiodown_supervisor_protocol::{
+    PluginBuildLog, PluginBuildLogStream, PluginInstallArtifact, PluginInstallOperation,
+    PluginInstallOperationList, PluginInstallOperationState, PluginInstallOperationSummary,
+    PluginRemoveResult, PluginRuntimeLog, PluginRuntimeState, SupervisorHealth,
+};
+use audiodown_supervisor_protocol::{
+    PluginInstallRequest, PluginRequest, SupervisorMethod, SupervisorParams, SupervisorRequest,
+    SupervisorResponse,
+};
 use chrono::Utc;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize};
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -16,6 +25,8 @@ use uuid::Uuid;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+pub const PLUGIN_INSTALL_POLL_INTERVAL: Duration = Duration::from_millis(500);
+pub const PLUGIN_INSTALL_WAIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 #[async_trait]
 pub trait SupervisorClient: Send + Sync {
@@ -32,30 +43,38 @@ pub trait SupervisorClient: Send + Sync {
         &self,
         plugin_id: &PluginId,
     ) -> Result<PluginRuntimeState, SupervisorError>;
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SupervisorHealth {
-    pub service: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginRuntimeState {
-    pub plugin_id: PluginId,
-    pub status: PluginStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub container_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub logs: Vec<PluginRuntimeLog>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginRuntimeLog {
-    pub level: String,
-    pub message: String,
-    #[serde(default)]
-    pub context: serde_json::Value,
+    async fn begin_plugin_install(
+        &self,
+        plugin_id: &PluginId,
+        operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError>;
+    async fn plugin_install_status(
+        &self,
+        plugin_id: &PluginId,
+        operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError>;
+    async fn finalize_plugin_install(
+        &self,
+        plugin_id: &PluginId,
+        operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError>;
+    async fn abort_plugin_install(
+        &self,
+        plugin_id: &PluginId,
+        operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError>;
+    async fn list_plugin_install_operations(
+        &self,
+    ) -> Result<PluginInstallOperationList, SupervisorError>;
+    async fn acknowledge_plugin_install(
+        &self,
+        plugin_id: &PluginId,
+        operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError>;
+    async fn remove_plugin(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<PluginRemoveResult, SupervisorError>;
 }
 
 #[derive(Debug, Error)]
@@ -97,18 +116,18 @@ impl UnixSupervisorClient {
 
     async fn call<T: DeserializeOwned>(
         &self,
-        method: &'static str,
-        plugin_id: Option<&PluginId>,
+        method: SupervisorMethod,
+        params: Option<SupervisorParams>,
     ) -> Result<T, SupervisorError> {
-        tokio::time::timeout(self.timeout, self.exchange(method, plugin_id))
+        tokio::time::timeout(self.timeout, self.exchange(method, params))
             .await
             .map_err(|_| SupervisorError::Timeout)?
     }
 
     async fn exchange<T: DeserializeOwned>(
         &self,
-        method: &'static str,
-        plugin_id: Option<&PluginId>,
+        method: SupervisorMethod,
+        params: Option<SupervisorParams>,
     ) -> Result<T, SupervisorError> {
         let token = tokio::fs::read_to_string(&self.token_path)
             .await
@@ -118,13 +137,13 @@ impl UnixSupervisorClient {
             return Err(SupervisorError::Unavailable);
         }
 
-        let request = WireRequest {
+        let request = SupervisorRequest {
             id: Uuid::new_v4().to_string(),
-            token,
+            token: token.to_string(),
             timestamp: Utc::now().timestamp(),
             nonce: Uuid::new_v4().to_string(),
             method,
-            params: plugin_id.map(|plugin_id| WirePluginRequest { plugin_id }),
+            params,
         };
         let mut encoded =
             serde_json::to_vec(&request).map_err(|_| SupervisorError::InvalidResponse)?;
@@ -139,7 +158,7 @@ impl UnixSupervisorClient {
             .map_err(|_| SupervisorError::Unavailable)?;
 
         let response_bytes = read_response(&mut stream, self.max_response_bytes).await?;
-        let response: WireResponse = serde_json::from_slice(&response_bytes)
+        let response: SupervisorResponse = serde_json::from_slice(&response_bytes)
             .map_err(|_| SupervisorError::InvalidResponse)?;
         if !response.ok {
             let code = response
@@ -162,7 +181,7 @@ impl SupervisorClient for UnixSupervisorClient {
             service: String,
         }
 
-        let result: PingResult = self.call("system.ping", None).await?;
+        let result: PingResult = self.call(SupervisorMethod::SystemPing, None).await?;
         if !result.ok {
             return Err(SupervisorError::InvalidResponse);
         }
@@ -175,21 +194,107 @@ impl SupervisorClient for UnixSupervisorClient {
         &self,
         plugin_id: &PluginId,
     ) -> Result<PluginRuntimeState, SupervisorError> {
-        self.call("plugin.start", Some(plugin_id)).await
+        self.call(
+            SupervisorMethod::PluginStart,
+            Some(plugin_params(plugin_id)),
+        )
+        .await
     }
 
     async fn stop_plugin(
         &self,
         plugin_id: &PluginId,
     ) -> Result<PluginRuntimeState, SupervisorError> {
-        self.call("plugin.stop", Some(plugin_id)).await
+        self.call(SupervisorMethod::PluginStop, Some(plugin_params(plugin_id)))
+            .await
     }
 
     async fn inspect_plugin(
         &self,
         plugin_id: &PluginId,
     ) -> Result<PluginRuntimeState, SupervisorError> {
-        self.call("plugin.inspect", Some(plugin_id)).await
+        self.call(
+            SupervisorMethod::PluginInspect,
+            Some(plugin_params(plugin_id)),
+        )
+        .await
+    }
+
+    async fn begin_plugin_install(
+        &self,
+        plugin_id: &PluginId,
+        operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError> {
+        self.call(
+            SupervisorMethod::PluginInstallBuild,
+            Some(install_params(plugin_id, operation_id)),
+        )
+        .await
+    }
+
+    async fn plugin_install_status(
+        &self,
+        plugin_id: &PluginId,
+        operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError> {
+        self.call(
+            SupervisorMethod::PluginInstallStatus,
+            Some(install_params(plugin_id, operation_id)),
+        )
+        .await
+    }
+
+    async fn finalize_plugin_install(
+        &self,
+        plugin_id: &PluginId,
+        operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError> {
+        self.call(
+            SupervisorMethod::PluginInstallFinalize,
+            Some(install_params(plugin_id, operation_id)),
+        )
+        .await
+    }
+
+    async fn abort_plugin_install(
+        &self,
+        plugin_id: &PluginId,
+        operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError> {
+        self.call(
+            SupervisorMethod::PluginInstallAbort,
+            Some(install_params(plugin_id, operation_id)),
+        )
+        .await
+    }
+
+    async fn list_plugin_install_operations(
+        &self,
+    ) -> Result<PluginInstallOperationList, SupervisorError> {
+        self.call(SupervisorMethod::PluginInstallList, None).await
+    }
+
+    async fn acknowledge_plugin_install(
+        &self,
+        plugin_id: &PluginId,
+        operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError> {
+        self.call(
+            SupervisorMethod::PluginInstallAck,
+            Some(install_params(plugin_id, operation_id)),
+        )
+        .await
+    }
+
+    async fn remove_plugin(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<PluginRemoveResult, SupervisorError> {
+        self.call(
+            SupervisorMethod::PluginRemove,
+            Some(plugin_params(plugin_id)),
+        )
+        .await
     }
 }
 
@@ -221,6 +326,59 @@ impl SupervisorClient for UnavailableSupervisorClient {
     ) -> Result<PluginRuntimeState, SupervisorError> {
         Err(SupervisorError::Unavailable)
     }
+
+    async fn begin_plugin_install(
+        &self,
+        _plugin_id: &PluginId,
+        _operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError> {
+        Err(SupervisorError::Unavailable)
+    }
+
+    async fn plugin_install_status(
+        &self,
+        _plugin_id: &PluginId,
+        _operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError> {
+        Err(SupervisorError::Unavailable)
+    }
+
+    async fn finalize_plugin_install(
+        &self,
+        _plugin_id: &PluginId,
+        _operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError> {
+        Err(SupervisorError::Unavailable)
+    }
+
+    async fn abort_plugin_install(
+        &self,
+        _plugin_id: &PluginId,
+        _operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError> {
+        Err(SupervisorError::Unavailable)
+    }
+
+    async fn list_plugin_install_operations(
+        &self,
+    ) -> Result<PluginInstallOperationList, SupervisorError> {
+        Err(SupervisorError::Unavailable)
+    }
+
+    async fn acknowledge_plugin_install(
+        &self,
+        _plugin_id: &PluginId,
+        _operation_id: Uuid,
+    ) -> Result<PluginInstallOperation, SupervisorError> {
+        Err(SupervisorError::Unavailable)
+    }
+
+    async fn remove_plugin(
+        &self,
+        _plugin_id: &PluginId,
+    ) -> Result<PluginRemoveResult, SupervisorError> {
+        Err(SupervisorError::Unavailable)
+    }
 }
 
 async fn read_response(
@@ -248,31 +406,15 @@ async fn read_response(
     Ok(response)
 }
 
-#[derive(Serialize)]
-struct WireRequest<'a> {
-    id: String,
-    token: &'a str,
-    timestamp: i64,
-    nonce: String,
-    method: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    params: Option<WirePluginRequest<'a>>,
+fn plugin_params(plugin_id: &PluginId) -> SupervisorParams {
+    SupervisorParams::Plugin(PluginRequest {
+        plugin_id: plugin_id.clone(),
+    })
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WirePluginRequest<'a> {
-    plugin_id: &'a PluginId,
-}
-
-#[derive(Deserialize)]
-struct WireResponse {
-    ok: bool,
-    result: Option<serde_json::Value>,
-    error: Option<WireError>,
-}
-
-#[derive(Deserialize)]
-struct WireError {
-    code: String,
+fn install_params(plugin_id: &PluginId, operation_id: Uuid) -> SupervisorParams {
+    SupervisorParams::Install(PluginInstallRequest {
+        plugin_id: plugin_id.clone(),
+        operation_id,
+    })
 }

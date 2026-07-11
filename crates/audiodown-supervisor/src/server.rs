@@ -6,6 +6,9 @@ use std::{
 };
 
 use audiodown_domain::plugin::PluginStatus;
+use audiodown_supervisor_protocol::{
+    PluginInstallOperationState, PluginRemoveResult, SupervisorParams,
+};
 use chrono::Utc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -16,7 +19,10 @@ use crate::{
     config::{Config, SupervisorIdentity},
     docker::DockerAdapter,
     install_record,
-    protocol::{SupervisorMethod, SupervisorRequest, SupervisorResponse},
+    protocol::{
+        OperationStoreError, ProtocolOperationStore, SupervisorMethod, SupervisorRequest,
+        SupervisorResponse,
+    },
 };
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -36,6 +42,7 @@ pub async fn run(
         docker,
         plugin_data: config.plugin_data,
         installation_id: identity.installation_id,
+        operations: ProtocolOperationStore::default(),
     });
 
     loop {
@@ -74,7 +81,7 @@ async fn handle_connection(
 
     let response = match request.validate_shape() {
         Err(error) => SupervisorResponse::failure(request.id, "INVALID_REQUEST", error.to_string()),
-        Ok(()) => match authenticator.validate(&request) {
+        Ok(_) => match authenticator.validate(&request) {
             Err(error) => {
                 SupervisorResponse::failure(request.id, "UNAUTHORIZED", error.to_string())
             }
@@ -95,10 +102,7 @@ async fn dispatch(
             serde_json::json!({"ok": true, "service": "audiodown-supervisor"}),
         ),
         SupervisorMethod::PluginInspect => {
-            let plugin_id = request
-                .params
-                .expect("validated request has params")
-                .plugin_id;
+            let plugin_id = plugin_params(request.params).plugin_id;
             match runtime.docker.inspect_plugin(&plugin_id).await {
                 Ok(inspection) => SupervisorResponse::success(
                     request.id,
@@ -116,10 +120,7 @@ async fn dispatch(
             }
         }
         SupervisorMethod::PluginStart => {
-            let plugin_id = request
-                .params
-                .expect("validated request has params")
-                .plugin_id;
+            let plugin_id = plugin_params(request.params).plugin_id;
             let install = match install_record::load(
                 &runtime.plugin_data,
                 &runtime.installation_id,
@@ -153,10 +154,7 @@ async fn dispatch(
             }
         }
         SupervisorMethod::PluginStop => {
-            let plugin_id = request
-                .params
-                .expect("validated request has params")
-                .plugin_id;
+            let plugin_id = plugin_params(request.params).plugin_id;
             match runtime.docker.stop_plugin(&plugin_id).await {
                 Ok(container_id) => SupervisorResponse::success(
                     request.id,
@@ -170,10 +168,7 @@ async fn dispatch(
             }
         }
         SupervisorMethod::PluginLogs => {
-            let plugin_id = request
-                .params
-                .expect("validated request has params")
-                .plugin_id;
+            let plugin_id = plugin_params(request.params).plugin_id;
             match runtime.docker.plugin_logs(&plugin_id).await {
                 Ok(logs) => SupervisorResponse::success(
                     request.id,
@@ -185,7 +180,128 @@ async fn dispatch(
                 Err(error) => docker_failure(request.id, error),
             }
         }
+        SupervisorMethod::PluginInstallBuild => {
+            let params = install_params(request.params);
+            match runtime.operations.begin(
+                &runtime.installation_id,
+                params.plugin_id,
+                params.operation_id,
+                Utc::now(),
+            ) {
+                Ok(operation) => serialized_success(request.id, &operation),
+                Err(OperationStoreError::OperationIdMismatch) => SupervisorResponse::failure(
+                    request.id,
+                    "OPERATION_ID_MISMATCH",
+                    "The operation ID belongs to another plugin",
+                ),
+                Err(error) => operation_failure(request.id, error),
+            }
+        }
+        SupervisorMethod::PluginInstallStatus => {
+            let params = install_params(request.params);
+            match runtime.operations.get(
+                &runtime.installation_id,
+                &params.plugin_id,
+                params.operation_id,
+            ) {
+                Ok(operation) => serialized_success(request.id, &operation),
+                Err(error) => operation_failure(request.id, error),
+            }
+        }
+        SupervisorMethod::PluginInstallFinalize => {
+            let params = install_params(request.params);
+            match runtime.operations.set_state(
+                &runtime.installation_id,
+                &params.plugin_id,
+                params.operation_id,
+                PluginInstallOperationState::Finalized,
+                Utc::now(),
+            ) {
+                Ok(operation) => serialized_success(request.id, &operation),
+                Err(error) => operation_failure(request.id, error),
+            }
+        }
+        SupervisorMethod::PluginInstallAbort => {
+            let params = install_params(request.params);
+            match runtime.operations.set_state(
+                &runtime.installation_id,
+                &params.plugin_id,
+                params.operation_id,
+                PluginInstallOperationState::Aborted,
+                Utc::now(),
+            ) {
+                Ok(operation) => serialized_success(request.id, &operation),
+                Err(error) => operation_failure(request.id, error),
+            }
+        }
+        SupervisorMethod::PluginInstallList => {
+            match runtime.operations.list(&runtime.installation_id) {
+                Ok(operations) => serialized_success(request.id, &operations),
+                Err(error) => operation_failure(request.id, error),
+            }
+        }
+        SupervisorMethod::PluginInstallAck => {
+            let params = install_params(request.params);
+            match runtime.operations.acknowledge(
+                &runtime.installation_id,
+                &params.plugin_id,
+                params.operation_id,
+                Utc::now(),
+            ) {
+                Ok(operation) => serialized_success(request.id, &operation),
+                Err(error) => operation_failure(request.id, error),
+            }
+        }
+        SupervisorMethod::PluginRemove => {
+            let plugin_id = plugin_params(request.params).plugin_id;
+            serialized_success(
+                request.id,
+                &PluginRemoveResult {
+                    plugin_id,
+                    removed_container: false,
+                    removed_image: false,
+                    removed_install_directory: false,
+                },
+            )
+        }
     }
+}
+
+fn plugin_params(params: Option<SupervisorParams>) -> audiodown_supervisor_protocol::PluginRequest {
+    let Some(SupervisorParams::Plugin(params)) = params else {
+        unreachable!("validated plugin method has plugin params");
+    };
+    params
+}
+
+fn install_params(
+    params: Option<SupervisorParams>,
+) -> audiodown_supervisor_protocol::PluginInstallRequest {
+    let Some(SupervisorParams::Install(params)) = params else {
+        unreachable!("validated install method has install params");
+    };
+    params
+}
+
+fn serialized_success(request_id: String, result: &impl serde::Serialize) -> SupervisorResponse {
+    match serde_json::to_value(result) {
+        Ok(result) => SupervisorResponse::success(request_id, result),
+        Err(error) => SupervisorResponse::failure(
+            request_id,
+            "INTERNAL_ERROR",
+            format!("Failed to serialize Supervisor result: {error}"),
+        ),
+    }
+}
+
+fn operation_failure(request_id: String, error: OperationStoreError) -> SupervisorResponse {
+    let code = match error {
+        OperationStoreError::OperationIdMismatch => "OPERATION_ID_MISMATCH",
+        OperationStoreError::NotFound => "OPERATION_NOT_FOUND",
+        OperationStoreError::NotTerminal => "OPERATION_NOT_TERMINAL",
+        OperationStoreError::StatePoisoned => "OPERATION_STATE_UNAVAILABLE",
+    };
+    SupervisorResponse::failure(request_id, code, error.to_string())
 }
 
 fn docker_failure(
@@ -199,6 +315,7 @@ struct Runtime {
     docker: DockerAdapter,
     plugin_data: std::path::PathBuf,
     installation_id: String,
+    operations: ProtocolOperationStore,
 }
 
 async fn read_request(stream: &mut UnixStream) -> anyhow::Result<Vec<u8>> {

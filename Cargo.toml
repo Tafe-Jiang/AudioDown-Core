@@ -8,6 +8,7 @@ members = [
   "crates/audiodown-logging",
   "crates/audiodown-server",
   "crates/audiodown-supervisor",
+  "crates/audiodown-supervisor-protocol",
 ]
 
 [workspace.package]
@@ -20,6 +21,7 @@ rust-version = "1.88"
 anyhow = "1.0"
 async-trait = "0.1"
 audiodown-plugin-manager = { path = "crates/audiodown-plugin-manager" }
+audiodown-supervisor-protocol = { path = "crates/audiodown-supervisor-protocol" }
 axum = "0.8"
 base64 = "0.22"
 bollard = "0.19"

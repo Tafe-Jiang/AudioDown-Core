@@ -137,6 +137,7 @@ dependencies = [
  "audiodown-plugin-api",
  "audiodown-plugin-manager",
  "audiodown-storage",
+ "audiodown-supervisor-protocol",
  "axum",
  "chrono",
  "flate2",
@@ -177,6 +178,7 @@ dependencies = [
  "anyhow",
  "audiodown-domain",
  "audiodown-plugin-api",
+ "audiodown-supervisor-protocol",
  "bollard",
  "chrono",
  "futures-util",
@@ -186,6 +188,18 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "audiodown-supervisor-protocol"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "audiodown-domain",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
  "uuid",
 ]
 

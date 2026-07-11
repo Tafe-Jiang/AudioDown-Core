@@ -13,6 +13,7 @@ audiodown-logging = { path = "../audiodown-logging" }
 audiodown-plugin-api = { path = "../audiodown-plugin-api" }
 audiodown-plugin-manager = { path = "../audiodown-plugin-manager" }
 audiodown-storage = { path = "../audiodown-storage" }
+audiodown-supervisor-protocol.workspace = true
 axum.workspace = true
 chrono.workspace = true
 mime_guess.workspace = true
