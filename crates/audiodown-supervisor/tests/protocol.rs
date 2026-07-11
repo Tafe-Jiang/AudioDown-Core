@@ -1,7 +1,7 @@
 use audiodown_domain::plugin::PluginId;
 use audiodown_supervisor::protocol::{OperationStoreError, ProtocolOperationStore};
 use audiodown_supervisor_protocol::{
-    PluginInstallOperationState, SupervisorParams, SupervisorRequest,
+    PluginInstallOperationState, ProtocolError, SupervisorParams, SupervisorRequest,
 };
 use chrono::{Duration, TimeZone, Utc};
 use uuid::Uuid;
@@ -44,6 +44,45 @@ fn lifecycle_request_rejects_arbitrary_container_fields() {
         }));
         assert!(request.is_err(), "field {field} must be rejected");
     }
+}
+
+#[test]
+fn content_rpc_request_accepts_only_typed_content_fields() {
+    let request: SupervisorRequest = serde_json::from_value(serde_json::json!({
+        "id": "req-1",
+        "token": "token",
+        "timestamp": 1,
+        "nonce": "nonce",
+        "method": "plugin.rpc",
+        "params": {
+            "pluginId": "com.audiodown.virtual.content",
+            "method": "content.album.get",
+            "params": {"resourceId": "album-1"}
+        }
+    }))
+    .unwrap();
+    assert!(matches!(
+        request.validate_shape(),
+        Ok(Some(SupervisorParams::Rpc(_)))
+    ));
+
+    let invalid: SupervisorRequest = serde_json::from_value(serde_json::json!({
+        "id": "req-1",
+        "token": "token",
+        "timestamp": 1,
+        "nonce": "nonce",
+        "method": "plugin.rpc",
+        "params": {
+            "pluginId": "com.audiodown.virtual.content",
+            "method": "content.album.get",
+            "params": {"resourceId": ""}
+        }
+    }))
+    .unwrap();
+    assert!(matches!(
+        invalid.validate_shape(),
+        Err(ProtocolError::InvalidRpcParams)
+    ));
 }
 
 #[test]

@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 audiodown-domain = { path = "../audiodown-domain" }
+audiodown-plugin-api = { path = "../audiodown-plugin-api" }
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true

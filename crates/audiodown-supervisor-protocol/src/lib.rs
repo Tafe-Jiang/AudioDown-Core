@@ -1,11 +1,19 @@
 #![forbid(unsafe_code)]
 
 use audiodown_domain::plugin::{PluginId, PluginStatus};
+use audiodown_plugin_api::{
+    content::{
+        AlbumGetRequest, CategoriesRequest, ContentMethod, DiscoverRequest, SearchRequest,
+        TracksListRequest,
+    },
+    rpc::JsonRpcResponse,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const MAX_OPERATION_LIST_ITEMS: usize = 256;
 const MAX_ERROR_DETAILS_BYTES: usize = 64 * 1024;
+const MAX_PLUGIN_RPC_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -47,6 +55,14 @@ impl SupervisorRequest {
                 Some(_) => Err(ProtocolError::InvalidParams),
                 None => Err(ProtocolError::MissingParams),
             },
+            SupervisorMethod::PluginRpc => match self.params.as_ref() {
+                Some(params @ SupervisorParams::Rpc(request)) => {
+                    request.validate()?;
+                    Ok(Some(params))
+                }
+                Some(_) => Err(ProtocolError::InvalidParams),
+                None => Err(ProtocolError::MissingParams),
+            },
         }
     }
 }
@@ -63,6 +79,8 @@ pub enum SupervisorMethod {
     PluginInspect,
     #[serde(rename = "plugin.logs")]
     PluginLogs,
+    #[serde(rename = "plugin.rpc")]
+    PluginRpc,
     #[serde(rename = "plugin.install.build")]
     PluginInstallBuild,
     #[serde(rename = "plugin.install.status")]
@@ -87,6 +105,7 @@ impl SupervisorMethod {
             Self::PluginStop => "plugin.stop",
             Self::PluginInspect => "plugin.inspect",
             Self::PluginLogs => "plugin.logs",
+            Self::PluginRpc => "plugin.rpc",
             Self::PluginInstallBuild => "plugin.install.build",
             Self::PluginInstallStatus => "plugin.install.status",
             Self::PluginInstallFinalize => "plugin.install.finalize",
@@ -103,6 +122,7 @@ impl SupervisorMethod {
 pub enum SupervisorParams {
     Install(PluginInstallRequest),
     Plugin(PluginRequest),
+    Rpc(PluginRpcRequest),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -116,6 +136,81 @@ pub struct PluginRequest {
 pub struct PluginInstallRequest {
     pub plugin_id: PluginId,
     pub operation_id: Uuid,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginRpcRequest {
+    pub plugin_id: PluginId,
+    pub method: ContentMethod,
+    pub params: serde_json::Value,
+}
+
+impl PluginRpcRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let encoded =
+            serde_json::to_vec(&self.params).map_err(|_| ProtocolError::InvalidRpcParams)?;
+        if encoded.len() > MAX_PLUGIN_RPC_BYTES {
+            return Err(ProtocolError::RpcParamsTooLarge);
+        }
+
+        let valid = match self.method {
+            ContentMethod::Search => serde_json::from_value::<SearchRequest>(self.params.clone())
+                .map_err(|_| ProtocolError::InvalidRpcParams)?
+                .validate(),
+            ContentMethod::Discover => {
+                serde_json::from_value::<DiscoverRequest>(self.params.clone())
+                    .map_err(|_| ProtocolError::InvalidRpcParams)?
+                    .validate()
+            }
+            ContentMethod::Categories => {
+                serde_json::from_value::<CategoriesRequest>(self.params.clone())
+                    .map_err(|_| ProtocolError::InvalidRpcParams)?;
+                Ok(())
+            }
+            ContentMethod::AlbumGet => {
+                serde_json::from_value::<AlbumGetRequest>(self.params.clone())
+                    .map_err(|_| ProtocolError::InvalidRpcParams)?
+                    .validate()
+            }
+            ContentMethod::TracksList => {
+                serde_json::from_value::<TracksListRequest>(self.params.clone())
+                    .map_err(|_| ProtocolError::InvalidRpcParams)?
+                    .validate()
+            }
+        };
+        valid.map_err(|_| ProtocolError::InvalidRpcParams)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginRpcResult {
+    pub response: JsonRpcResponse,
+}
+
+impl PluginRpcResult {
+    pub fn new(response: JsonRpcResponse) -> Result<Self, ProtocolError> {
+        let result = Self { response };
+        result.validate()?;
+        Ok(result)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let encoded =
+            serde_json::to_vec(&self.response).map_err(|_| ProtocolError::InvalidRpcResponse)?;
+        if encoded.len() > MAX_PLUGIN_RPC_BYTES {
+            return Err(ProtocolError::RpcResponseTooLarge);
+        }
+        if self.response.jsonrpc != "2.0"
+            || self.response.id.is_empty()
+            || self.response.id.len() > 128
+            || self.response.result.is_some() == self.response.error.is_some()
+        {
+            return Err(ProtocolError::InvalidRpcResponse);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,6 +416,14 @@ pub enum ProtocolError {
     UnexpectedParams,
     #[error("request parameters do not match the method")]
     InvalidParams,
+    #[error("plugin RPC parameters are invalid")]
+    InvalidRpcParams,
+    #[error("plugin RPC parameters exceed the size limit")]
+    RpcParamsTooLarge,
+    #[error("plugin RPC response is invalid")]
+    InvalidRpcResponse,
+    #[error("plugin RPC response exceeds the size limit")]
+    RpcResponseTooLarge,
     #[error("protocol error details may contain only buildLogs")]
     InvalidErrorDetails,
     #[error("protocol error details exceed the size limit")]

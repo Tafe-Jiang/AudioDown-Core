@@ -4,9 +4,10 @@ use std::{
 };
 
 use audiodown_domain::plugin::PluginId;
+use audiodown_plugin_api::content::ContentMethod;
 use audiodown_server::supervisor::{SupervisorClient, SupervisorError, UnixSupervisorClient};
 use audiodown_supervisor_protocol::{
-    PluginInstallOperation, PluginInstallOperationState, PluginRemoveResult,
+    PluginInstallOperation, PluginInstallOperationState, PluginRemoveResult, PluginRpcResult,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -26,7 +27,7 @@ impl TestEndpoint {
             .unwrap()
             .as_nanos();
         let directory =
-            std::env::temp_dir().join(format!("audiodown-{label}-{}-{unique}", std::process::id()));
+            PathBuf::from("/tmp").join(format!("ad-{label}-{}-{unique}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let token = directory.join("core.token");
         std::fs::write(&token, "test-token\n").unwrap();
@@ -241,4 +242,61 @@ async fn sends_only_fixed_install_operation_parameters() {
         requests[6]["params"],
         serde_json::json!({"pluginId": plugin_id})
     );
+}
+
+#[tokio::test]
+async fn sends_only_typed_content_rpc_parameters() {
+    let endpoint = TestEndpoint::new("supervisor-content-rpc");
+    let listener = UnixListener::bind(&endpoint.socket).unwrap();
+    let plugin_id = PluginId::parse("com.audiodown.virtual.content").unwrap();
+    let expected_plugin = plugin_id.clone();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+        let mut request = String::new();
+        BufReader::new(reader)
+            .read_line(&mut request)
+            .await
+            .unwrap();
+        let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+        let response = serde_json::json!({
+            "id": request["id"],
+            "ok": true,
+            "result": {
+                "response": {
+                    "jsonrpc": "2.0",
+                    "id": "plugin-request",
+                    "result": {"items": [], "nextCursor": null}
+                }
+            }
+        });
+        writer
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+        (request, expected_plugin)
+    });
+    let client = UnixSupervisorClient::new(&endpoint.socket, &endpoint.token);
+
+    let result: PluginRpcResult = client
+        .invoke_plugin(
+            &plugin_id,
+            ContentMethod::Search,
+            serde_json::json!({"query": "virtual", "limit": 20}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.response.id, "plugin-request");
+
+    let (request, expected_plugin) = server.await.unwrap();
+    assert_eq!(request["method"], "plugin.rpc");
+    assert_eq!(
+        request["params"],
+        serde_json::json!({
+            "pluginId": expected_plugin,
+            "method": "content.search",
+            "params": {"query": "virtual", "limit": 20}
+        })
+    );
+    assert_eq!(request["params"].as_object().unwrap().len(), 3);
 }

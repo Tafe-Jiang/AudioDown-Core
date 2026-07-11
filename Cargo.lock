@@ -208,6 +208,7 @@ name = "audiodown-supervisor-protocol"
 version = "1.0.0-alpha.1"
 dependencies = [
  "audiodown-domain",
+ "audiodown-plugin-api",
  "chrono",
  "serde",
  "serde_json",

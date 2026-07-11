@@ -1,9 +1,13 @@
 use audiodown_domain::plugin::PluginId;
+use audiodown_plugin_api::{
+    content::ContentMethod,
+    rpc::{JsonRpcError, JsonRpcResponse},
+};
 use audiodown_supervisor_protocol::{
     PluginBuildLog, PluginBuildLogStream, PluginInstallArtifact, PluginInstallOperation,
     PluginInstallOperationList, PluginInstallOperationState, PluginInstallOperationSummary,
-    PluginInstallRequest, PluginRemoveResult, PluginRequest, ProtocolError, SupervisorMethod,
-    SupervisorParams, SupervisorRequest, SupervisorResponse,
+    PluginInstallRequest, PluginRemoveResult, PluginRequest, PluginRpcRequest, PluginRpcResult,
+    ProtocolError, SupervisorMethod, SupervisorParams, SupervisorRequest, SupervisorResponse,
 };
 use uuid::Uuid;
 
@@ -60,6 +64,27 @@ fn accepts_only_method_specific_parameter_shapes() {
         remove.validate_shape(),
         Ok(Some(SupervisorParams::Plugin(_)))
     ));
+
+    let rpc: SupervisorRequest = serde_json::from_value(serde_json::json!({
+        "id": "req-1",
+        "token": "token",
+        "timestamp": 1,
+        "nonce": "nonce",
+        "method": "plugin.rpc",
+        "params": {
+            "pluginId": "com.audiodown.virtual.content",
+            "method": "content.search",
+            "params": {
+                "query": "virtual",
+                "limit": 20
+            }
+        }
+    }))
+    .unwrap();
+    assert!(matches!(
+        rpc.validate_shape(),
+        Ok(Some(SupervisorParams::Rpc(_)))
+    ));
 }
 
 #[test]
@@ -105,6 +130,105 @@ fn rejects_caller_controlled_install_and_remove_fields() {
         "mounts": ["/:/host"]
     }))
     .is_err());
+}
+
+#[test]
+fn plugin_rpc_accepts_only_typed_bounded_content_calls() {
+    let plugin_id = PluginId::parse("com.audiodown.virtual.content").unwrap();
+    let request = PluginRpcRequest {
+        plugin_id: plugin_id.clone(),
+        method: ContentMethod::Search,
+        params: serde_json::json!({"query": "virtual", "limit": 20}),
+    };
+    request.validate().unwrap();
+
+    for field in [
+        "timeout",
+        "command",
+        "socketPath",
+        "containerId",
+        "mounts",
+        "environment",
+    ] {
+        let mut params = serde_json::json!({
+            "pluginId": plugin_id,
+            "method": "content.search",
+            "params": {"query": "virtual", "limit": 20}
+        });
+        params[field] = serde_json::json!("caller-controlled");
+        assert!(
+            serde_json::from_value::<PluginRpcRequest>(params).is_err(),
+            "{field}"
+        );
+    }
+
+    assert!(
+        serde_json::from_value::<PluginRpcRequest>(serde_json::json!({
+            "pluginId": plugin_id,
+            "method": "content.download.plan",
+            "params": {}
+        }))
+        .is_err()
+    );
+
+    let invalid: SupervisorRequest = serde_json::from_value(serde_json::json!({
+        "id": "req-1",
+        "token": "token",
+        "timestamp": 1,
+        "nonce": "nonce",
+        "method": "plugin.rpc",
+        "params": {
+            "pluginId": plugin_id,
+            "method": "content.search",
+            "params": {"query": "", "limit": 20}
+        }
+    }))
+    .unwrap();
+    assert!(matches!(
+        invalid.validate_shape(),
+        Err(ProtocolError::InvalidRpcParams)
+    ));
+
+    let oversized = PluginRpcRequest {
+        plugin_id,
+        method: ContentMethod::Search,
+        params: serde_json::json!({
+            "query": "virtual",
+            "limit": 20,
+            "padding": "x".repeat(1024 * 1024)
+        }),
+    };
+    assert!(matches!(
+        oversized.validate(),
+        Err(ProtocolError::RpcParamsTooLarge)
+    ));
+}
+
+#[test]
+fn plugin_rpc_result_bounds_the_json_rpc_response() {
+    let response = JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        id: "plugin-request".to_string(),
+        result: Some(serde_json::json!({"items": []})),
+        error: None,
+    };
+    let result = PluginRpcResult::new(response).unwrap();
+    assert_eq!(result.response.id, "plugin-request");
+
+    let oversized = JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        id: "plugin-request".to_string(),
+        result: None,
+        error: Some(JsonRpcError {
+            code: -32000,
+            message: "Plugin call failed".to_string(),
+            data: Some(serde_json::json!({"summary": "x".repeat(1024 * 1024)})),
+        }),
+    };
+    assert!(matches!(
+        PluginRpcResult::new(oversized),
+        Err(ProtocolError::RpcResponseTooLarge)
+    ));
 }
 
 #[test]
@@ -254,4 +378,5 @@ fn rejects_unknown_top_level_fields_and_invalid_method_shapes() {
         SupervisorMethod::PluginInstallBuild.as_str(),
         "plugin.install.build"
     );
+    assert_eq!(SupervisorMethod::PluginRpc.as_str(), "plugin.rpc");
 }

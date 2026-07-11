@@ -186,6 +186,7 @@ git commit -m "阶段3：扩展内容插件 SDK" \
 - Modify: `crates/audiodown-supervisor-protocol/tests/contracts.rs`
 - Modify: `crates/audiodown-server/src/supervisor.rs`
 - Modify: `crates/audiodown-server/tests/supervisor_client.rs`
+- Modify: `crates/audiodown-supervisor/src/server.rs`
 - Modify: `crates/audiodown-supervisor/tests/protocol.rs`
 
 - [ ] **Step 1: Write failing protocol tests**
@@ -204,7 +205,7 @@ Expected: FAIL because `plugin.rpc` is absent.
 
 - [ ] **Step 3: Implement the protocol and Core client**
 
-Add the enum variant, strict parameter variant, result type, and `SupervisorClient::invoke_plugin`. Reuse authenticated request framing and existing maximum message validation. Do not accept caller-controlled timeout or Docker values.
+Add the enum variant, strict parameter variant, result type, and `SupervisorClient::invoke_plugin`. Reuse authenticated request framing and existing maximum message validation. Do not accept caller-controlled timeout or Docker values. Add a temporary stable `PLUGIN_RPC_UNAVAILABLE` dispatch branch so the new exhaustive method compiles; Task 4 replaces only that branch with real runtime execution.
 
 - [ ] **Step 4: Run protocol checks**
 

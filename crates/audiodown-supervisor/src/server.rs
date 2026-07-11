@@ -188,6 +188,11 @@ async fn dispatch(
                 Err(error) => docker_failure(request.id, error),
             }
         }
+        SupervisorMethod::PluginRpc => SupervisorResponse::failure(
+            request.id,
+            "PLUGIN_RPC_UNAVAILABLE",
+            "Plugin RPC execution is not available",
+        ),
         SupervisorMethod::PluginInstallBuild => {
             let params = install_params(request.params);
             match runtime

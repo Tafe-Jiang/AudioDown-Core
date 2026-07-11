@@ -5,14 +5,15 @@ use std::{
 
 use async_trait::async_trait;
 use audiodown_domain::plugin::PluginId;
+use audiodown_plugin_api::content::ContentMethod;
 pub use audiodown_supervisor_protocol::{
     PluginBuildLog, PluginBuildLogStream, PluginInstallArtifact, PluginInstallOperation,
     PluginInstallOperationList, PluginInstallOperationState, PluginInstallOperationSummary,
-    PluginRemoveResult, PluginRuntimeLog, PluginRuntimeState, SupervisorHealth,
+    PluginRemoveResult, PluginRpcResult, PluginRuntimeLog, PluginRuntimeState, SupervisorHealth,
 };
 use audiodown_supervisor_protocol::{
-    PluginInstallRequest, PluginRequest, SupervisorMethod, SupervisorParams, SupervisorRequest,
-    SupervisorResponse,
+    PluginInstallRequest, PluginRequest, PluginRpcRequest, SupervisorMethod, SupervisorParams,
+    SupervisorRequest, SupervisorResponse,
 };
 use chrono::Utc;
 use serde::{de::DeserializeOwned, Deserialize};
@@ -24,6 +25,7 @@ use tokio::{
 use uuid::Uuid;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
+const PLUGIN_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 pub const PLUGIN_INSTALL_POLL_INTERVAL: Duration = Duration::from_millis(500);
 pub const PLUGIN_INSTALL_WAIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -43,6 +45,12 @@ pub trait SupervisorClient: Send + Sync {
         &self,
         plugin_id: &PluginId,
     ) -> Result<PluginRuntimeState, SupervisorError>;
+    async fn invoke_plugin(
+        &self,
+        plugin_id: &PluginId,
+        method: ContentMethod,
+        params: serde_json::Value,
+    ) -> Result<PluginRpcResult, SupervisorError>;
     async fn begin_plugin_install(
         &self,
         plugin_id: &PluginId,
@@ -120,6 +128,17 @@ impl UnixSupervisorClient {
         params: Option<SupervisorParams>,
     ) -> Result<T, SupervisorError> {
         tokio::time::timeout(self.timeout, self.exchange(method, params))
+            .await
+            .map_err(|_| SupervisorError::Timeout)?
+    }
+
+    async fn call_with_timeout<T: DeserializeOwned>(
+        &self,
+        timeout: Duration,
+        method: SupervisorMethod,
+        params: Option<SupervisorParams>,
+    ) -> Result<T, SupervisorError> {
+        tokio::time::timeout(timeout, self.exchange(method, params))
             .await
             .map_err(|_| SupervisorError::Timeout)?
     }
@@ -218,6 +237,29 @@ impl SupervisorClient for UnixSupervisorClient {
             Some(plugin_params(plugin_id)),
         )
         .await
+    }
+
+    async fn invoke_plugin(
+        &self,
+        plugin_id: &PluginId,
+        method: ContentMethod,
+        params: serde_json::Value,
+    ) -> Result<PluginRpcResult, SupervisorError> {
+        let result: PluginRpcResult = self
+            .call_with_timeout(
+                PLUGIN_RPC_TIMEOUT,
+                SupervisorMethod::PluginRpc,
+                Some(SupervisorParams::Rpc(PluginRpcRequest {
+                    plugin_id: plugin_id.clone(),
+                    method,
+                    params,
+                })),
+            )
+            .await?;
+        result
+            .validate()
+            .map_err(|_| SupervisorError::InvalidResponse)?;
+        Ok(result)
     }
 
     async fn begin_plugin_install(
@@ -324,6 +366,15 @@ impl SupervisorClient for UnavailableSupervisorClient {
         &self,
         _plugin_id: &PluginId,
     ) -> Result<PluginRuntimeState, SupervisorError> {
+        Err(SupervisorError::Unavailable)
+    }
+
+    async fn invoke_plugin(
+        &self,
+        _plugin_id: &PluginId,
+        _method: ContentMethod,
+        _params: serde_json::Value,
+    ) -> Result<PluginRpcResult, SupervisorError> {
         Err(SupervisorError::Unavailable)
     }
 
