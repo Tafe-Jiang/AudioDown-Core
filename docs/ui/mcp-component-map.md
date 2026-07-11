@@ -90,3 +90,16 @@ React/TSX source is not copied. All runtime components are Vue/Reka UI.
   successful list visible and adds an inline Alert.
 - The initial request uses stable table-shaped Skeleton rows; a genuinely
   empty response uses a compact `empty-demo` composition.
+
+## System Status Adaptations
+
+- The system page uses one full-width semantic definition list with four
+  stable rows for Core version, Supervisor availability, installed plugin
+  count, and developer mode.
+- Loading keeps the same four-row dimensions with Skeleton values, so the
+  first viewport does not shift after `/system` resolves.
+- StatusBadge combines icon and text. Developer mode is always warning-toned,
+  while disabled developer mode remains neutral.
+- Supervisor unavailability and developer mode share one Alert. Low-level
+  Supervisor error details are not rendered, and the page has no restart,
+  update, or secret-related controls.
