@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/audiodown-content",
   "crates/audiodown-domain",
   "crates/audiodown-plugin-api",
   "crates/audiodown-plugin-manager",
@@ -20,6 +21,7 @@ rust-version = "1.88"
 [workspace.dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
+audiodown-content = { path = "crates/audiodown-content" }
 audiodown-plugin-manager = { path = "crates/audiodown-plugin-manager" }
 audiodown-supervisor-protocol = { path = "crates/audiodown-supervisor-protocol" }
 axum = "0.8"
