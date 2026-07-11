@@ -32,7 +32,7 @@ sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "migrate", "macros", "chrono", "uuid"] }
 thiserror = "2.0"
 tokio = { version = "1.46", features = ["macros", "rt-multi-thread", "net", "signal", "time", "fs", "sync", "process", "io-util"] }
-tower = "0.5"
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "request-id", "trace", "fs"] }
 tracing = "0.1"
 tracing-appender = "0.2"
