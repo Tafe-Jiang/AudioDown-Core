@@ -1,42 +1,60 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { Compass } from "@lucide/vue";
+import { useRouter } from "vue-router";
 
 import { api, type EmptyStateResponse } from "../api/client";
+import AsyncState from "../components/common/AsyncState.vue";
+import EmptyState from "../components/common/EmptyState.vue";
+import PageHeader from "../components/common/PageHeader.vue";
 
+const router = useRouter();
 const state = ref<EmptyStateResponse | null>(null);
 const error = ref("");
+const loading = ref(false);
 
-onMounted(async () => {
+async function load() {
+  loading.value = true;
+  error.value = "";
   try {
     state.value = await api.discover();
   } catch {
     error.value = "无法读取发现状态";
+  } finally {
+    loading.value = false;
   }
-});
+}
+
+onMounted(load);
 </script>
 
 <template>
-  <section class="page">
-    <header class="page-header">
-      <div>
-        <p class="eyebrow">CONTENT</p>
-        <h1>发现</h1>
-      </div>
-      <span class="mode-badge">空状态</span>
-    </header>
+  <section class="grid gap-5">
+    <PageHeader
+      title="发现"
+      description="内容插件提供的发现频道会显示在这里。"
+    />
 
-    <div v-if="error" class="notice error-notice">{{ error }}</div>
-    <div v-else-if="!state" class="loading-line">正在读取 Core 状态...</div>
-    <div v-else class="empty-state">
-      <div class="empty-signal" aria-hidden="true">
-        <span></span><span></span><span></span><span></span><span></span>
-      </div>
-      <p class="empty-code">{{ state.reason }}</p>
-      <h2>{{ state.title }}</h2>
-      <p>安装内容插件后，发现频道会显示在这里。</p>
-      <RouterLink class="primary-action" to="/plugins">
-        {{ state.actionLabel }}
-      </RouterLink>
-    </div>
+    <AsyncState
+      :loading="loading"
+      :error="error"
+      :empty="Boolean(state)"
+      @retry="load"
+    >
+      <template #empty>
+        <EmptyState
+          v-if="state"
+          class="min-h-[420px] border-0 bg-transparent"
+          :title="state.title"
+          description="安装内容插件后，发现频道会显示在这里。"
+          :primary-label="state.actionLabel"
+          @primary="router.push('/plugins')"
+        >
+          <template #icon>
+            <Compass aria-hidden="true" />
+          </template>
+        </EmptyState>
+      </template>
+    </AsyncState>
   </section>
 </template>

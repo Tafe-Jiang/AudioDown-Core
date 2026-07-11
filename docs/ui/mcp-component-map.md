@@ -36,3 +36,12 @@ React/TSX source is not copied. All runtime components are Vue/Reka UI.
 - Desktop collapse state is stored only as
   `audiodown.sidebar.collapsed`; the generated sidebar Cookie persistence is
   disabled.
+
+## Content Empty-State Adaptations
+
+- Discover uses one unframed `empty-demo` composition with a Compass icon and
+  the Core-provided title and action label.
+- Search keeps the Field/Input/Button query group outside `AsyncState`, so
+  loading and retry never replace or clear the query.
+- Skeleton and Alert replace text-only loading and error lines. No sample
+  content, platform, chart, or repository data is introduced.

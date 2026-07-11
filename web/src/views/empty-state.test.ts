@@ -1,4 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
+import { createMemoryHistory, createRouter } from "vue-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import DiscoverView from "./DiscoverView.vue";
@@ -28,17 +29,29 @@ describe("empty state views", () => {
       }),
     );
 
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/", component: view },
+        {
+          path: "/plugins",
+          component: { template: "<div>插件页</div>" },
+        },
+      ],
+    });
+    await router.push("/");
+    await router.isReady();
     const wrapper = mount(view, {
       global: {
-        stubs: {
-          RouterLink: { template: "<a><slot /></a>" },
-        },
+        plugins: [router],
       },
     });
     await flushPromises();
 
     expect(wrapper.text()).toContain("尚未安装内容插件");
     expect(wrapper.text()).toContain("添加 GitHub 插件仓库");
+    expect(wrapper.find(".empty-signal").exists()).toBe(false);
+    expect(wrapper.find(".loading-line").exists()).toBe(false);
   });
 
   it("shows Supervisor availability without platform labels", async () => {
