@@ -6,7 +6,7 @@ use std::{
 };
 
 use audiodown_domain::plugin::PluginStatus;
-use audiodown_supervisor_protocol::{PluginRemoveResult, SupervisorParams};
+use audiodown_supervisor_protocol::SupervisorParams;
 use chrono::Utc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -254,15 +254,30 @@ async fn dispatch(
         }
         SupervisorMethod::PluginRemove => {
             let plugin_id = plugin_params(request.params).plugin_id;
-            serialized_success(
-                request.id,
-                &PluginRemoveResult {
-                    plugin_id,
-                    removed_container: false,
-                    removed_image: false,
-                    removed_install_directory: false,
-                },
+            let install = match install_record::load(
+                &runtime.plugin_data,
+                &runtime.installation_id,
+                &plugin_id,
             )
+            .await
+            {
+                Ok(install) => install,
+                Err(error) => {
+                    return SupervisorResponse::failure(
+                        request.id,
+                        "INVALID_INSTALL_RECORD",
+                        error.to_string(),
+                    )
+                }
+            };
+            match runtime
+                .docker
+                .remove_plugin(&runtime.plugin_data, install)
+                .await
+            {
+                Ok(removed) => serialized_success(request.id, &removed),
+                Err(error) => docker_failure(request.id, error),
+            }
         }
     }
 }

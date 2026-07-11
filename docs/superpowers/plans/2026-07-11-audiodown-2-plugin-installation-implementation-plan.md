@@ -1784,7 +1784,14 @@ git commit -m "阶段2：安装已校验仓库插件" \
 - Modify: `crates/audiodown-supervisor/src/docker.rs`
 - Test: `crates/audiodown-plugin-manager/tests/management_service.rs`
 - Test: `crates/audiodown-server/tests/plugin_management_api.rs`
+- Test: `crates/audiodown-server/tests/http_api.rs`
 - Test: `crates/audiodown-supervisor/tests/remove_policy.rs`
+
+> **Test-fixture correction:** Existing lifecycle error coverage in
+> `http_api.rs` must seed an installed plugin and use the real manager adapters
+> with an unavailable Supervisor. Otherwise the manager-owned route fails at
+> the intentionally unavailable state-store fixture and does not exercise the
+> required `SUPERVISOR_UNAVAILABLE` behavior.
 
 - [ ] **Step 1: Write failing manager and management API tests**
 

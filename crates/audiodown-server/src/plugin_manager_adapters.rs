@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 use audiodown_domain::{
     log::{LogLevel, StructuredLog},
-    plugin::{PluginId, RunMode},
+    plugin::PluginId,
 };
 use audiodown_plugin_manager::{
     service::{
         InstallPluginRecord, LifecycleAuthorizationError, LifecycleRiskAuthorizer,
-        PluginBuildLogRecord, PluginRuntimeControl, PluginStateStore,
+        PluginBuildLogRecord, PluginRuntimeControl, PluginRuntimeLogRecord, PluginStateStore,
     },
     staging::LifecycleRiskGrant,
     DownloadedSnapshot, PluginManagerError, RepositorySource,
@@ -156,6 +156,59 @@ impl PluginStateStore for SqlitePluginManagerStore {
                     "sequence": record.sequence,
                     "stream": record.stream,
                 }),
+            })
+            .await
+            .map_err(|_| PluginManagerError::PluginStateUnavailable)
+    }
+
+    async fn get_plugin(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<Option<InstallPluginRecord>, PluginManagerError> {
+        self.storage
+            .plugins()
+            .get(plugin_id)
+            .await
+            .map(|record| record.map(|record| manager_record(record, Uuid::nil())))
+            .map_err(|_| PluginManagerError::PluginStateUnavailable)
+    }
+
+    async fn save_plugin(&self, record: &InstallPluginRecord) -> Result<(), PluginManagerError> {
+        self.storage
+            .plugins()
+            .upsert(&storage_record(record))
+            .await
+            .map_err(|_| PluginManagerError::PluginStateUnavailable)
+    }
+
+    async fn delete_plugin(&self, plugin_id: &PluginId) -> Result<(), PluginManagerError> {
+        self.storage
+            .plugins()
+            .delete(plugin_id)
+            .await
+            .map_err(|_| PluginManagerError::PluginStateUnavailable)
+    }
+
+    async fn persist_runtime_log(
+        &self,
+        record: &PluginRuntimeLogRecord,
+    ) -> Result<(), PluginManagerError> {
+        self.storage
+            .logs()
+            .append(&StructuredLog {
+                id: Uuid::new_v4(),
+                timestamp: record.timestamp,
+                level: parse_log_level(&record.level),
+                component: "plugin-runtime".to_string(),
+                message: record.message.clone(),
+                plugin_id: Some(record.plugin_id.to_string()),
+                plugin_version: non_empty(&record.plugin_version),
+                platform_id: non_empty(&record.platform_id),
+                request_id: None,
+                task_id: None,
+                container_id: record.container_id.clone(),
+                error_code: None,
+                context: record.context.clone(),
             })
             .await
             .map_err(|_| PluginManagerError::PluginStateUnavailable)
@@ -344,14 +397,14 @@ fn storage_record(record: &InstallPluginRecord) -> PluginRecord {
         source_hash: Some(record.source_hash.clone()),
         image_id: record.image_id.clone(),
         status: record.status,
-        run_mode: RunMode::OnDemand,
-        priority: 100,
-        enabled: true,
-        last_error: None,
+        run_mode: record.run_mode,
+        priority: record.priority,
+        enabled: record.enabled,
+        last_error: record.last_error.clone(),
         install_operation_id: record.install_operation_id,
-        last_used_at: None,
+        last_used_at: record.last_used_at,
         installed_at: record.installed_at,
-        updated_at: record.installed_at,
+        updated_at: record.updated_at,
     }
 }
 
@@ -372,8 +425,14 @@ fn manager_record(record: PluginRecord, operation_id: Uuid) -> InstallPluginReco
         source_hash: record.source_hash.unwrap_or_default(),
         image_id: record.image_id,
         status: record.status,
+        run_mode: record.run_mode,
+        priority: record.priority,
+        enabled: record.enabled,
+        last_error: record.last_error,
         install_operation_id: record.install_operation_id,
+        last_used_at: record.last_used_at,
         installed_at: record.installed_at,
+        updated_at: record.updated_at,
     }
 }
 
@@ -383,4 +442,14 @@ fn runtime_error(_error: SupervisorError) -> PluginManagerError {
 
 fn non_empty(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
+}
+
+fn parse_log_level(level: &str) -> LogLevel {
+    match level {
+        "trace" => LogLevel::Trace,
+        "debug" => LogLevel::Debug,
+        "warn" => LogLevel::Warn,
+        "error" => LogLevel::Error,
+        _ => LogLevel::Info,
+    }
 }

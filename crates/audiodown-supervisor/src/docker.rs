@@ -1,4 +1,8 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use audiodown_domain::plugin::PluginId;
 use bollard::{
@@ -6,7 +10,7 @@ use bollard::{
     models::{ContainerCreateBody, HostConfig},
     query_parameters::{
         CreateContainerOptionsBuilder, LogsOptionsBuilder, RemoveContainerOptionsBuilder,
-        StopContainerOptionsBuilder,
+        RemoveImageOptionsBuilder, StopContainerOptionsBuilder,
     },
     Docker,
 };
@@ -40,6 +44,14 @@ pub struct PluginLog {
 pub struct StartedPlugin {
     pub container_id: String,
     pub logs: Vec<PluginLog>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ManagedRemovalPlan {
+    pub plugin_id: PluginId,
+    pub image_id: String,
+    pub install_directory: PathBuf,
+    pub expected_image_labels: HashMap<String, String>,
 }
 
 impl DockerAdapter {
@@ -225,6 +237,64 @@ impl DockerAdapter {
         self.plugin_logs_by_container(&container_id).await
     }
 
+    pub async fn remove_plugin(
+        &self,
+        plugin_data: &Path,
+        install: ValidatedInstall,
+    ) -> Result<audiodown_supervisor_protocol::PluginRemoveResult, DockerAdapterError> {
+        let plan = managed_removal_plan(plugin_data, &self.installation_id, &install)?;
+        let container_id = self.find_managed_container(&plan.plugin_id).await?;
+        let image = self.docker.inspect_image(&plan.image_id).await?;
+        let labels = image
+            .config
+            .and_then(|config| config.labels)
+            .unwrap_or_default();
+        if !plan
+            .expected_image_labels
+            .iter()
+            .all(|(key, value)| labels.get(key) == Some(value))
+        {
+            return Err(DockerAdapterError::ImageLabelMismatch);
+        }
+
+        let removed_container = if let Some(container_id) = container_id {
+            self.docker
+                .remove_container(
+                    &container_id,
+                    Some(
+                        RemoveContainerOptionsBuilder::new()
+                            .force(true)
+                            .v(true)
+                            .build(),
+                    ),
+                )
+                .await?;
+            true
+        } else {
+            false
+        };
+        self.docker
+            .remove_image(
+                &plan.image_id,
+                Some(
+                    RemoveImageOptionsBuilder::new()
+                        .force(true)
+                        .noprune(false)
+                        .build(),
+                ),
+                None,
+            )
+            .await?;
+        remove_managed_install_directory(&plan.install_directory)?;
+
+        Ok(audiodown_supervisor_protocol::PluginRemoveResult {
+            plugin_id: plan.plugin_id,
+            removed_container,
+            removed_image: true,
+            removed_install_directory: true,
+        })
+    }
+
     pub async fn find_managed_container(
         &self,
         plugin_id: &PluginId,
@@ -391,6 +461,53 @@ impl DockerAdapter {
     }
 }
 
+pub fn managed_removal_plan(
+    plugin_data: &Path,
+    installation_id: &str,
+    install: &ValidatedInstall,
+) -> Result<ManagedRemovalPlan, DockerAdapterError> {
+    let expected = install
+        .expected_image_labels
+        .clone()
+        .ok_or(DockerAdapterError::RemovalAttestationMismatch)?;
+    if install.installed.installation_id != installation_id
+        || expected.get("io.audiodown.managed").map(String::as_str) != Some("true")
+        || expected
+            .get("io.audiodown.installation")
+            .map(String::as_str)
+            != Some(installation_id)
+        || expected.get("io.audiodown.plugin-id").map(String::as_str)
+            != Some(install.installed.plugin_id.as_str())
+    {
+        return Err(DockerAdapterError::RemovalAttestationMismatch);
+    }
+
+    let install_directory = plugin_data
+        .join("installed")
+        .join(install.installed.plugin_id.as_str());
+    validate_install_directory(&install_directory)?;
+    Ok(ManagedRemovalPlan {
+        plugin_id: install.installed.plugin_id.clone(),
+        image_id: install.installed.image_id.clone(),
+        install_directory,
+        expected_image_labels: expected,
+    })
+}
+
+fn validate_install_directory(path: &Path) -> Result<(), DockerAdapterError> {
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|_| DockerAdapterError::UnsafeInstallDirectory)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(DockerAdapterError::UnsafeInstallDirectory);
+    }
+    Ok(())
+}
+
+fn remove_managed_install_directory(path: &Path) -> Result<(), DockerAdapterError> {
+    validate_install_directory(path)?;
+    std::fs::remove_dir_all(path).map_err(|_| DockerAdapterError::UnsafeInstallDirectory)
+}
+
 #[derive(Debug, Clone)]
 pub struct PluginInspection {
     pub container_id: Option<String>,
@@ -490,6 +607,10 @@ pub enum DockerAdapterError {
     LabelMismatch,
     #[error("managed image labels do not match the install attestation")]
     ImageLabelMismatch,
+    #[error("managed removal attestation does not match the requested plugin")]
+    RemovalAttestationMismatch,
+    #[error("managed install directory is unsafe")]
+    UnsafeInstallDirectory,
     #[error("plugin handshake failed: {0}")]
     Handshake(String),
 }

@@ -567,8 +567,14 @@ impl InstallFixture {
             source_hash: SOURCE_HASH.to_string(),
             image_id: Some(IMAGE_ID.to_string()),
             status: PluginStatus::Installing,
+            run_mode: audiodown_domain::plugin::RunMode::OnDemand,
+            priority: 100,
+            enabled: true,
+            last_error: None,
             install_operation_id: Some(operation_id),
+            last_used_at: None,
             installed_at: Utc::now(),
+            updated_at: Utc::now(),
         }
     }
 }

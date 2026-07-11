@@ -1,5 +1,5 @@
 use axum::{
-    routing::{get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 
@@ -21,6 +21,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/plugins/{plugin_id}/start", post(plugins::start))
         .route("/plugins/{plugin_id}/stop", post(plugins::stop))
         .route("/plugins/{plugin_id}/runtime", get(plugins::runtime))
+        .route("/plugins/{plugin_id}", patch(plugins::update))
+        .route("/plugins/{plugin_id}", delete(plugins::uninstall))
         .route(
             "/dev/plugins/register-fixture",
             post(plugins::register_fixture),

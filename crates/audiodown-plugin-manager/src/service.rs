@@ -6,11 +6,11 @@ use std::{
 };
 
 use async_trait::async_trait;
-use audiodown_domain::plugin::{PluginId, PluginStatus};
+use audiodown_domain::plugin::{PluginId, PluginStatus, RunMode};
 use audiodown_plugin_api::manifest::PluginType;
 use audiodown_supervisor_protocol::{
     PluginBuildLog, PluginBuildLogStream, PluginInstallArtifact, PluginInstallOperation,
-    PluginInstallOperationList, PluginInstallOperationState, PluginRemoveResult,
+    PluginInstallOperationList, PluginInstallOperationState, PluginRemoveResult, PluginRuntimeLog,
     PluginRuntimeState,
 };
 use chrono::{DateTime, Utc};
@@ -75,6 +75,28 @@ pub trait PluginStateStore: Send + Sync {
     async fn persist_build_log(
         &self,
         _record: &PluginBuildLogRecord,
+    ) -> Result<(), PluginManagerError> {
+        Err(PluginManagerError::PluginStateUnavailable)
+    }
+
+    async fn get_plugin(
+        &self,
+        _plugin_id: &PluginId,
+    ) -> Result<Option<InstallPluginRecord>, PluginManagerError> {
+        Err(PluginManagerError::PluginStateUnavailable)
+    }
+
+    async fn save_plugin(&self, _record: &InstallPluginRecord) -> Result<(), PluginManagerError> {
+        Err(PluginManagerError::PluginStateUnavailable)
+    }
+
+    async fn delete_plugin(&self, _plugin_id: &PluginId) -> Result<(), PluginManagerError> {
+        Err(PluginManagerError::PluginStateUnavailable)
+    }
+
+    async fn persist_runtime_log(
+        &self,
+        _record: &PluginRuntimeLogRecord,
     ) -> Result<(), PluginManagerError> {
         Err(PluginManagerError::PluginStateUnavailable)
     }
@@ -446,6 +468,248 @@ impl PluginManagerService {
         first_error.map_or(Ok(()), Err)
     }
 
+    pub async fn start(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<InstallPluginRecord, PluginManagementError> {
+        let _operation_guard = self
+            .try_operation_lock(plugin_id)
+            .map_err(map_management_lock_error)?;
+        let mut record = self.load_plugin(plugin_id).await?;
+        if !record.enabled {
+            return Err(PluginManagementError::PluginDisabled);
+        }
+        if let Err(error) = self.start_transition(&mut record).await {
+            self.record_management_failure(&record).await;
+            return Err(error);
+        }
+        self.save_and_reload(record).await
+    }
+
+    pub async fn stop(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<InstallPluginRecord, PluginManagementError> {
+        let _operation_guard = self
+            .try_operation_lock(plugin_id)
+            .map_err(map_management_lock_error)?;
+        let mut record = self.load_plugin(plugin_id).await?;
+        if let Err(error) = self.stop_transition(&mut record).await {
+            self.record_management_failure(&record).await;
+            return Err(error);
+        }
+        self.save_and_reload(record).await
+    }
+
+    pub async fn inspect_runtime(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<InstallPluginRecord, PluginManagementError> {
+        let _operation_guard = self
+            .try_operation_lock(plugin_id)
+            .map_err(map_management_lock_error)?;
+        let mut record = self.load_plugin(plugin_id).await?;
+        let runtime = match self.runtime.inspect(plugin_id).await {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                self.record_management_failure(&record).await;
+                return Err(PluginManagementError::RuntimeUnavailable);
+            }
+        };
+        self.validate_runtime(&runtime, plugin_id)?;
+        self.persist_runtime_logs(&record, &runtime).await?;
+        record.status = runtime.status;
+        record.last_error = None;
+        record.updated_at = Utc::now();
+        self.save_and_reload(record).await
+    }
+
+    pub async fn update_settings(
+        &self,
+        command: UpdatePluginSettingsCommand,
+    ) -> Result<InstallPluginRecord, PluginManagementError> {
+        if !(0..=1000).contains(&command.priority) {
+            return Err(PluginManagementError::InvalidPriority);
+        }
+        let _operation_guard = self
+            .try_operation_lock(&command.plugin_id)
+            .map_err(map_management_lock_error)?;
+        let mut record = self.load_plugin(&command.plugin_id).await?;
+        let previous = record.clone();
+
+        let runtime_result = if !command.enabled && record.enabled {
+            self.stop_transition(&mut record).await
+        } else if command.enabled
+            && command.run_mode == RunMode::Always
+            && (!record.enabled || record.run_mode != RunMode::Always)
+        {
+            self.start_transition(&mut record).await
+        } else {
+            Ok(())
+        };
+        if let Err(error) = runtime_result {
+            self.record_management_failure(&previous).await;
+            return Err(error);
+        }
+
+        record.enabled = command.enabled;
+        record.run_mode = command.run_mode;
+        record.priority = command.priority;
+        record.last_error = None;
+        record.updated_at = Utc::now();
+        if !record.enabled {
+            record.status = PluginStatus::Disabled;
+        } else if previous.status == PluginStatus::Disabled && command.run_mode == RunMode::OnDemand
+        {
+            record.status = PluginStatus::Stopped;
+        }
+        self.save_and_reload(record).await
+    }
+
+    pub async fn uninstall(&self, plugin_id: &PluginId) -> Result<(), PluginManagementError> {
+        let _operation_guard = self
+            .try_operation_lock(plugin_id)
+            .map_err(map_management_lock_error)?;
+        let mut record = self.load_plugin(plugin_id).await?;
+
+        if let Err(error) = self.stop_transition(&mut record).await {
+            self.record_management_failure(&record).await;
+            return Err(error);
+        }
+        self.state_store
+            .save_plugin(&record)
+            .await
+            .map_err(|_| PluginManagementError::Internal)?;
+
+        let removed = match self.runtime.remove(plugin_id).await {
+            Ok(removed) => removed,
+            Err(_) => {
+                self.record_management_failure(&record).await;
+                return Err(PluginManagementError::RuntimeUnavailable);
+            }
+        };
+        if removed.plugin_id != *plugin_id
+            || !removed.removed_image
+            || !removed.removed_install_directory
+        {
+            self.record_management_failure(&record).await;
+            return Err(PluginManagementError::RuntimeUnavailable);
+        }
+        self.state_store
+            .delete_plugin(plugin_id)
+            .await
+            .map_err(|_| PluginManagementError::Internal)
+    }
+
+    async fn start_transition(
+        &self,
+        record: &mut InstallPluginRecord,
+    ) -> Result<(), PluginManagementError> {
+        let started = self
+            .runtime
+            .start(&record.plugin_id)
+            .await
+            .map_err(|_| PluginManagementError::RuntimeUnavailable)?;
+        self.validate_runtime(&started, &record.plugin_id)?;
+        self.persist_runtime_logs(record, &started).await?;
+
+        let inspected = self
+            .runtime
+            .inspect(&record.plugin_id)
+            .await
+            .map_err(|_| PluginManagementError::RuntimeUnavailable)?;
+        self.validate_runtime(&inspected, &record.plugin_id)?;
+        if inspected.status != PluginStatus::Healthy {
+            return Err(PluginManagementError::InvalidRuntimeState);
+        }
+        self.persist_runtime_logs(record, &inspected).await?;
+        record.status = PluginStatus::Healthy;
+        record.last_used_at = Some(Utc::now());
+        record.last_error = None;
+        record.updated_at = Utc::now();
+        Ok(())
+    }
+
+    async fn stop_transition(
+        &self,
+        record: &mut InstallPluginRecord,
+    ) -> Result<(), PluginManagementError> {
+        let stopped = self
+            .runtime
+            .stop(&record.plugin_id)
+            .await
+            .map_err(|_| PluginManagementError::RuntimeUnavailable)?;
+        self.validate_runtime(&stopped, &record.plugin_id)?;
+        if stopped.status != PluginStatus::Stopped {
+            return Err(PluginManagementError::InvalidRuntimeState);
+        }
+        self.persist_runtime_logs(record, &stopped).await?;
+        record.status = PluginStatus::Stopped;
+        record.last_error = None;
+        record.updated_at = Utc::now();
+        Ok(())
+    }
+
+    fn validate_runtime(
+        &self,
+        runtime: &PluginRuntimeState,
+        plugin_id: &PluginId,
+    ) -> Result<(), PluginManagementError> {
+        if runtime.plugin_id != *plugin_id
+            || !matches!(
+                runtime.status,
+                PluginStatus::Healthy | PluginStatus::Stopped | PluginStatus::Unhealthy
+            )
+        {
+            return Err(PluginManagementError::InvalidRuntimeState);
+        }
+        Ok(())
+    }
+
+    async fn persist_runtime_logs(
+        &self,
+        record: &InstallPluginRecord,
+        runtime: &PluginRuntimeState,
+    ) -> Result<(), PluginManagementError> {
+        for log in &runtime.logs {
+            self.state_store
+                .persist_runtime_log(&runtime_log_record(record, runtime, log))
+                .await
+                .map_err(|_| PluginManagementError::Internal)?;
+        }
+        Ok(())
+    }
+
+    async fn load_plugin(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<InstallPluginRecord, PluginManagementError> {
+        self.state_store
+            .get_plugin(plugin_id)
+            .await
+            .map_err(|_| PluginManagementError::Internal)?
+            .ok_or(PluginManagementError::PluginNotFound)
+    }
+
+    async fn save_and_reload(
+        &self,
+        record: InstallPluginRecord,
+    ) -> Result<InstallPluginRecord, PluginManagementError> {
+        let plugin_id = record.plugin_id.clone();
+        self.state_store
+            .save_plugin(&record)
+            .await
+            .map_err(|_| PluginManagementError::Internal)?;
+        self.load_plugin(&plugin_id).await
+    }
+
+    async fn record_management_failure(&self, record: &InstallPluginRecord) {
+        let mut failed = record.clone();
+        failed.last_error = Some("plugin runtime action failed".to_string());
+        failed.updated_at = Utc::now();
+        let _ = self.state_store.save_plugin(&failed).await;
+    }
+
     async fn reconcile_operation(
         &self,
         operation: audiodown_supervisor_protocol::PluginInstallOperationSummary,
@@ -808,8 +1072,14 @@ pub struct InstallPluginRecord {
     pub source_hash: String,
     pub image_id: Option<String>,
     pub status: PluginStatus,
+    pub run_mode: RunMode,
+    pub priority: i64,
+    pub enabled: bool,
+    pub last_error: Option<String>,
     pub install_operation_id: Option<Uuid>,
+    pub last_used_at: Option<DateTime<Utc>>,
     pub installed_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -822,6 +1092,44 @@ pub struct PluginBuildLogRecord {
     pub stream: PluginBuildLogStream,
     pub message: String,
     pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginRuntimeLogRecord {
+    pub plugin_id: PluginId,
+    pub plugin_version: String,
+    pub platform_id: String,
+    pub level: String,
+    pub message: String,
+    pub context: serde_json::Value,
+    pub container_id: Option<String>,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdatePluginSettingsCommand {
+    pub plugin_id: PluginId,
+    pub enabled: bool,
+    pub run_mode: RunMode,
+    pub priority: i64,
+}
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum PluginManagementError {
+    #[error("plugin was not found")]
+    PluginNotFound,
+    #[error("plugin priority is outside the allowed range")]
+    InvalidPriority,
+    #[error("another operation is already running for this plugin")]
+    PluginOperationInProgress,
+    #[error("disabled plugins cannot be started")]
+    PluginDisabled,
+    #[error("plugin runtime returned an invalid state")]
+    InvalidRuntimeState,
+    #[error("plugin runtime service is unavailable")]
+    RuntimeUnavailable,
+    #[error("plugin management failed")]
+    Internal,
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -1026,6 +1334,7 @@ fn install_record(
     operation_id: Uuid,
     artifact: &PluginInstallArtifact,
 ) -> InstallPluginRecord {
+    let now = Utc::now();
     InstallPluginRecord {
         operation_id,
         plugin_id: staged.manifest.id.clone(),
@@ -1042,8 +1351,14 @@ fn install_record(
         source_hash: staged.source_hash.clone(),
         image_id: Some(artifact.image_id.clone()),
         status: PluginStatus::Installing,
+        run_mode: RunMode::OnDemand,
+        priority: 100,
+        enabled: true,
+        last_error: None,
         install_operation_id: Some(operation_id),
-        installed_at: Utc::now(),
+        last_used_at: None,
+        installed_at: now,
+        updated_at: now,
     }
 }
 
@@ -1089,4 +1404,28 @@ fn redact_build_log(message: &str) -> String {
     assignment
         .replace_all(&redacted, "$1=[REDACTED]")
         .into_owned()
+}
+
+fn runtime_log_record(
+    record: &InstallPluginRecord,
+    runtime: &PluginRuntimeState,
+    log: &PluginRuntimeLog,
+) -> PluginRuntimeLogRecord {
+    PluginRuntimeLogRecord {
+        plugin_id: record.plugin_id.clone(),
+        plugin_version: record.version.clone(),
+        platform_id: record.platform_id.clone(),
+        level: log.level.clone(),
+        message: redact_build_log(&log.message),
+        context: audiodown_logging::redact_json(&log.context),
+        container_id: runtime.container_id.clone(),
+        timestamp: Utc::now(),
+    }
+}
+
+fn map_management_lock_error(error: InstallError) -> PluginManagementError {
+    match error {
+        InstallError::PluginOperationInProgress => PluginManagementError::PluginOperationInProgress,
+        _ => PluginManagementError::Internal,
+    }
 }

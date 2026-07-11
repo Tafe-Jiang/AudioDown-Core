@@ -1,9 +1,9 @@
-use audiodown_domain::{
-    log::{LogLevel, StructuredLog},
-    plugin::{PluginId, PluginStatus, RunMode},
-};
+use audiodown_domain::plugin::{PluginId, PluginStatus, RunMode};
 use audiodown_plugin_api::manifest::PluginManifest;
-use audiodown_plugin_manager::service::{InstallError, InstallPluginCommand, LifecycleRiskInput};
+use audiodown_plugin_manager::service::{
+    InstallError, InstallPluginCommand, InstallPluginRecord, LifecycleRiskInput,
+    PluginManagementError, UpdatePluginSettingsCommand,
+};
 use audiodown_storage::PluginRecord;
 use axum::{
     extract::{Path, Query, State},
@@ -19,7 +19,7 @@ use crate::{
     plugin_manager_adapters::secret_matches,
     routes::{internal_error, ApiError, ApiResult},
     state::AppState,
-    supervisor::{PluginRuntimeState, SupervisorError},
+    supervisor::PluginRuntimeState,
 };
 
 const VIRTUAL_PLUGIN_ID: &str = "com.audiodown.virtual.content";
@@ -34,10 +34,16 @@ pub struct PluginListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PluginItem {
     pub plugin_id: String,
+    pub plugin_type: audiodown_plugin_api::manifest::PluginType,
+    pub platform_id: String,
     pub name: String,
     pub version: String,
     pub status: PluginStatus,
     pub enabled: bool,
+    pub run_mode: RunMode,
+    pub priority: i64,
+    pub source_url: String,
+    pub commit_sha: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,16 +66,7 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<PluginListResponse
         .list()
         .await
         .map_err(internal_error)?;
-    let items = records
-        .into_iter()
-        .map(|record| PluginItem {
-            plugin_id: record.plugin_id.to_string(),
-            name: record.name,
-            version: record.version,
-            status: record.status,
-            enabled: record.enabled,
-        })
-        .collect();
+    let items = records.into_iter().map(plugin_item_from_storage).collect();
     Ok(Json(PluginListResponse { items }))
 }
 
@@ -88,40 +85,11 @@ pub async fn start(
 ) -> ApiResult<PluginRuntimeState> {
     let plugin_id = parse_plugin_id(plugin_id)?;
     let record = state
-        .storage
-        .plugins()
-        .get(&plugin_id)
+        .plugin_manager
+        .start(&plugin_id)
         .await
-        .map_err(internal_error)?;
-    state
-        .storage
-        .plugins()
-        .set_status(&plugin_id, PluginStatus::Starting)
-        .await
-        .map_err(internal_error)?;
-
-    match state.supervisor.start_plugin(&plugin_id).await {
-        Ok(runtime) => {
-            if let Some(record) = &record {
-                persist_runtime_logs(&state, record, &runtime).await?;
-            }
-            state
-                .storage
-                .plugins()
-                .set_status(&plugin_id, PluginStatus::Healthy)
-                .await
-                .map_err(internal_error)?;
-            Ok(Json(runtime))
-        }
-        Err(error) => {
-            let _ = state
-                .storage
-                .plugins()
-                .set_status(&plugin_id, PluginStatus::Unhealthy)
-                .await;
-            Err(supervisor_error(error))
-        }
-    }
+        .map_err(management_error)?;
+    Ok(Json(runtime_state(&record)))
 }
 
 pub async fn stop(
@@ -129,25 +97,12 @@ pub async fn stop(
     Path(plugin_id): Path<String>,
 ) -> ApiResult<PluginRuntimeState> {
     let plugin_id = parse_plugin_id(plugin_id)?;
-    match state.supervisor.stop_plugin(&plugin_id).await {
-        Ok(runtime) => {
-            state
-                .storage
-                .plugins()
-                .set_status(&plugin_id, PluginStatus::Stopped)
-                .await
-                .map_err(internal_error)?;
-            Ok(Json(runtime))
-        }
-        Err(error) => {
-            let _ = state
-                .storage
-                .plugins()
-                .set_status(&plugin_id, PluginStatus::Unhealthy)
-                .await;
-            Err(supervisor_error(error))
-        }
-    }
+    let record = state
+        .plugin_manager
+        .stop(&plugin_id)
+        .await
+        .map_err(management_error)?;
+    Ok(Json(runtime_state(&record)))
 }
 
 pub async fn runtime(
@@ -155,19 +110,12 @@ pub async fn runtime(
     Path(plugin_id): Path<String>,
 ) -> ApiResult<PluginRuntimeState> {
     let plugin_id = parse_plugin_id(plugin_id)?;
-    require_plugin(&state, &plugin_id).await?;
-    let runtime = state
-        .supervisor
-        .inspect_plugin(&plugin_id)
+    let record = state
+        .plugin_manager
+        .inspect_runtime(&plugin_id)
         .await
-        .map_err(supervisor_error)?;
-    state
-        .storage
-        .plugins()
-        .set_status(&plugin_id, runtime.status)
-        .await
-        .map_err(internal_error)?;
-    Ok(Json(runtime))
+        .map_err(management_error)?;
+    Ok(Json(runtime_state(&record)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,13 +149,7 @@ pub async fn install(
         .await
         .map_err(install_error)?;
 
-    Ok(Json(PluginItem {
-        plugin_id: installed.plugin_id.to_string(),
-        name: installed.name,
-        version: installed.version,
-        status: installed.status,
-        enabled: true,
-    }))
+    Ok(Json(plugin_item_from_manager(installed)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -285,13 +227,47 @@ pub async fn register_fixture(
         .await
         .map_err(internal_error)?;
 
-    Ok(Json(PluginItem {
-        plugin_id: record.plugin_id.to_string(),
-        name: record.name,
-        version: record.version,
-        status: record.status,
-        enabled: record.enabled,
-    }))
+    Ok(Json(plugin_item_from_storage(record)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdatePluginSettingsRequest {
+    pub enabled: bool,
+    pub run_mode: RunMode,
+    pub priority: i64,
+}
+
+pub async fn update(
+    State(state): State<AppState>,
+    Path(plugin_id): Path<String>,
+    Json(request): Json<UpdatePluginSettingsRequest>,
+) -> ApiResult<PluginItem> {
+    let plugin_id = parse_plugin_id(plugin_id)?;
+    let record = state
+        .plugin_manager
+        .update_settings(UpdatePluginSettingsCommand {
+            plugin_id,
+            enabled: request.enabled,
+            run_mode: request.run_mode,
+            priority: request.priority,
+        })
+        .await
+        .map_err(management_error)?;
+    Ok(Json(plugin_item_from_manager(record)))
+}
+
+pub async fn uninstall(
+    State(state): State<AppState>,
+    Path(plugin_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let plugin_id = parse_plugin_id(plugin_id)?;
+    state
+        .plugin_manager
+        .uninstall(&plugin_id)
+        .await
+        .map_err(management_error)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn token_matches(expected: Option<&SecretString>, supplied: Option<&str>) -> bool {
@@ -381,66 +357,6 @@ fn parse_plugin_id(plugin_id: String) -> Result<PluginId, (StatusCode, Json<ApiE
     })
 }
 
-async fn require_plugin(
-    state: &AppState,
-    plugin_id: &PluginId,
-) -> Result<PluginRecord, (StatusCode, Json<ApiError>)> {
-    state
-        .storage
-        .plugins()
-        .get(plugin_id)
-        .await
-        .map_err(internal_error)?
-        .ok_or_else(|| {
-            api_error(
-                StatusCode::NOT_FOUND,
-                "PLUGIN_NOT_FOUND",
-                "Plugin is not installed",
-            )
-        })
-}
-
-async fn persist_runtime_logs(
-    state: &AppState,
-    record: &PluginRecord,
-    runtime: &PluginRuntimeState,
-) -> Result<(), (StatusCode, Json<ApiError>)> {
-    for entry in &runtime.logs {
-        let log = StructuredLog {
-            id: Uuid::new_v4(),
-            timestamp: Utc::now(),
-            level: parse_log_level(&entry.level),
-            component: "plugin-runtime".to_string(),
-            message: audiodown_logging::redact_text(&entry.message),
-            plugin_id: Some(record.plugin_id.to_string()),
-            plugin_version: Some(record.version.clone()),
-            platform_id: Some(record.platform_id.clone()),
-            request_id: None,
-            task_id: None,
-            container_id: runtime.container_id.clone(),
-            error_code: None,
-            context: audiodown_logging::redact_json(&entry.context),
-        };
-        state
-            .storage
-            .logs()
-            .append(&log)
-            .await
-            .map_err(internal_error)?;
-    }
-    Ok(())
-}
-
-fn parse_log_level(level: &str) -> LogLevel {
-    match level {
-        "trace" => LogLevel::Trace,
-        "debug" => LogLevel::Debug,
-        "warn" => LogLevel::Warn,
-        "error" => LogLevel::Error,
-        _ => LogLevel::Info,
-    }
-}
-
 fn is_lower_hex_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -462,23 +378,78 @@ fn api_error(
     )
 }
 
-fn supervisor_error(error: SupervisorError) -> (StatusCode, Json<ApiError>) {
-    if error.is_unavailable() {
-        (
+fn management_error(error: PluginManagementError) -> (StatusCode, Json<ApiError>) {
+    match error {
+        PluginManagementError::PluginNotFound => api_error(
+            StatusCode::NOT_FOUND,
+            "PLUGIN_NOT_FOUND",
+            "Plugin is not installed",
+        ),
+        PluginManagementError::InvalidPriority => api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_PRIORITY",
+            "Plugin priority must be between 0 and 1000",
+        ),
+        PluginManagementError::PluginOperationInProgress => api_error(
+            StatusCode::CONFLICT,
+            "PLUGIN_OPERATION_IN_PROGRESS",
+            "Another operation is already running for this plugin",
+        ),
+        PluginManagementError::PluginDisabled => api_error(
+            StatusCode::CONFLICT,
+            "PLUGIN_DISABLED",
+            "Disabled plugins cannot be started",
+        ),
+        PluginManagementError::RuntimeUnavailable => api_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiError {
-                code: "SUPERVISOR_UNAVAILABLE",
-                message: "Plugin management service is unavailable".to_string(),
-            }),
-        )
-    } else {
-        tracing::warn!(error = %error, "Supervisor rejected plugin lifecycle request");
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(ApiError {
-                code: "SUPERVISOR_ERROR",
-                message: "Plugin lifecycle request failed".to_string(),
-            }),
-        )
+            "SUPERVISOR_UNAVAILABLE",
+            "Plugin management service is unavailable",
+        ),
+        PluginManagementError::InvalidRuntimeState | PluginManagementError::Internal => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "PLUGIN_MANAGEMENT_FAILED",
+            "Plugin management request failed",
+        ),
+    }
+}
+
+fn plugin_item_from_storage(record: PluginRecord) -> PluginItem {
+    PluginItem {
+        plugin_id: record.plugin_id.to_string(),
+        plugin_type: record.plugin_type,
+        platform_id: record.platform_id,
+        name: record.name,
+        version: record.version,
+        status: record.status,
+        enabled: record.enabled,
+        run_mode: record.run_mode,
+        priority: record.priority,
+        source_url: record.source_ref,
+        commit_sha: record.commit_sha.unwrap_or_default(),
+    }
+}
+
+fn plugin_item_from_manager(record: InstallPluginRecord) -> PluginItem {
+    PluginItem {
+        plugin_id: record.plugin_id.to_string(),
+        plugin_type: record.plugin_type,
+        platform_id: record.platform_id,
+        name: record.name,
+        version: record.version,
+        status: record.status,
+        enabled: record.enabled,
+        run_mode: record.run_mode,
+        priority: record.priority,
+        source_url: record.source_ref,
+        commit_sha: record.commit_sha,
+    }
+}
+
+fn runtime_state(record: &InstallPluginRecord) -> PluginRuntimeState {
+    PluginRuntimeState {
+        plugin_id: record.plugin_id.clone(),
+        status: record.status,
+        container_id: None,
+        logs: Vec::new(),
     }
 }
