@@ -3,10 +3,22 @@ set -eu
 
 compose_file="${COMPOSE_FILE:-docker-compose.yml}"
 config_file="$(mktemp /tmp/audiodown-compose-config.XXXXXX)"
+owns_data_dir=0
+if [ -z "${AUDIODOWN_HOST_DATA_DIR:-}" ]; then
+  AUDIODOWN_HOST_DATA_DIR="$(mktemp -d /tmp/audiodown-compose-data.XXXXXX)"
+  export AUDIODOWN_HOST_DATA_DIR
+  owns_data_dir=1
+fi
 
 cleanup() {
-  docker compose -f "$compose_file" down --remove-orphans >/dev/null 2>&1 || true
+  status=$?
+  if [ "${AUDIODOWN_KEEP_CONTAINERS_ON_FAILURE:-0}" != "1" ] || [ "$status" -eq 0 ]; then
+    docker compose -f "$compose_file" down --remove-orphans >/dev/null 2>&1 || true
+  fi
   rm -f "$config_file"
+  if [ "$owns_data_dir" -eq 1 ]; then
+    rm -rf "$AUDIODOWN_HOST_DATA_DIR"
+  fi
 }
 trap cleanup EXIT INT TERM
 

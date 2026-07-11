@@ -3,9 +3,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use audiodown_server::supervisor::{
-    SupervisorClient, SupervisorError, UnixSupervisorClient,
-};
+use audiodown_server::supervisor::{SupervisorClient, SupervisorError, UnixSupervisorClient};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixListener,
@@ -64,11 +62,11 @@ async fn spawn_response_server(
 #[tokio::test]
 async fn pings_supervisor_over_unix_socket() {
     let endpoint = TestEndpoint::new("supervisor-success");
-    let response = br#"{"id":"response-id","ok":true,"result":{"ok":true,"service":"audiodown-supervisor"}}
+    let response =
+        br#"{"id":"response-id","ok":true,"result":{"ok":true,"service":"audiodown-supervisor"}}
 "#
-    .to_vec();
-    let server =
-        spawn_response_server(&endpoint.socket, response, Duration::from_millis(0)).await;
+        .to_vec();
+    let server = spawn_response_server(&endpoint.socket, response, Duration::from_millis(0)).await;
     let client = UnixSupervisorClient::new(&endpoint.socket, &endpoint.token);
 
     let health = client.ping().await.unwrap();
@@ -97,18 +95,11 @@ async fn rejects_malformed_response() {
 #[tokio::test]
 async fn times_out_after_default_two_seconds() {
     let endpoint = TestEndpoint::new("supervisor-timeout");
-    let server = spawn_response_server(
-        &endpoint.socket,
-        Vec::new(),
-        Duration::from_millis(2_200),
-    )
-    .await;
+    let server =
+        spawn_response_server(&endpoint.socket, Vec::new(), Duration::from_millis(2_200)).await;
     let client = UnixSupervisorClient::new(&endpoint.socket, &endpoint.token);
 
-    assert!(matches!(
-        client.ping().await,
-        Err(SupervisorError::Timeout)
-    ));
+    assert!(matches!(client.ping().await, Err(SupervisorError::Timeout)));
     server.await.unwrap();
 }
 
@@ -127,8 +118,7 @@ async fn reports_missing_socket_as_unavailable() {
 async fn rejects_response_larger_than_one_mebibyte() {
     let endpoint = TestEndpoint::new("supervisor-oversized");
     let response = vec![b'x'; 1024 * 1024 + 1];
-    let server =
-        spawn_response_server(&endpoint.socket, response, Duration::from_millis(0)).await;
+    let server = spawn_response_server(&endpoint.socket, response, Duration::from_millis(0)).await;
     let client = UnixSupervisorClient::new(&endpoint.socket, &endpoint.token);
 
     assert!(matches!(

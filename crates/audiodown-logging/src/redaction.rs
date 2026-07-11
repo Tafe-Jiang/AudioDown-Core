@@ -9,11 +9,9 @@ pub fn redact_text(input: &str) -> String {
         Regex::new(r"(?i)(cookie\s*:\s*)[^;\r\n]+").expect("cookie redaction regex must compile");
     let bearer = Regex::new(r"(?i)\bbearer\s+[a-z0-9._~+/=-]+")
         .expect("bearer redaction regex must compile");
-    let mobile =
-        Regex::new(r"\b1[3-9][0-9]{9}\b").expect("mobile redaction regex must compile");
-    let query_secret =
-        Regex::new(r"(?i)([?&](?:token|access_token|password|secret)=)[^&#\s]*")
-            .expect("query secret redaction regex must compile");
+    let mobile = Regex::new(r"\b1[3-9][0-9]{9}\b").expect("mobile redaction regex must compile");
+    let query_secret = Regex::new(r"(?i)([?&](?:token|access_token|password|secret)=)[^&#\s]*")
+        .expect("query secret redaction regex must compile");
 
     let output = authorization
         .replace_all(input, |captures: &Captures<'_>| {

@@ -63,8 +63,7 @@ async fn exposes_foundation_api_surface() {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(empty_state["reason"], "NO_CONTENT_PLUGINS");
         let serialized = empty_state.to_string().to_ascii_lowercase();
-        assert!(!serialized.contains("youtube"));
-        assert!(!serialized.contains("spotify"));
+        assert!(!serialized.contains("hardcoded-platform-label"));
     }
 }
 

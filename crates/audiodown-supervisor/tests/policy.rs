@@ -20,7 +20,10 @@ fn generated_container_spec_enforces_security_invariants() {
     assert_eq!(spec.nano_cpus, 500_000_000);
     assert_eq!(spec.pids_limit, 64);
     assert!(spec.cap_drop.contains(&"ALL".to_string()));
-    assert!(!spec.mounts.iter().any(|mount| mount.contains("docker.sock")));
+    assert!(!spec
+        .mounts
+        .iter()
+        .any(|mount| mount.contains("docker.sock")));
     assert!(!spec.host_network);
     assert_eq!(spec.labels["io.audiodown.managed"], "true");
     assert!(!spec.privileged);

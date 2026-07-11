@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            plugin-sdk/node/package-lock.json
+      - uses: dtolnay/rust-toolchain@1.88
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Prepare embedded UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Rust checks
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked --workspace
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Node SDK tests
+        working-directory: plugin-sdk/node
+        run: |
+          npm ci
+          npm test
+      - name: Vue checks
+        working-directory: web
+        run: |
+          npm test -- --run
+          npm run typecheck
+          npm run build
+
+  docker-integration:
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: audiodown-${{ github.run_id }}-${{ github.run_attempt }}
+      AUDIODOWN_KEEP_CONTAINERS_ON_FAILURE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Docker integration checks
+        run: |
+          set +e
+          ./tests/compose-smoke.sh &&
+          ./tests/virtual-plugin-smoke.sh &&
+          ./tests/security-boundary.sh
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            mkdir -p artifacts
+            docker compose logs --no-color >artifacts/compose.log 2>&1 || true
+            for container in $(docker ps -aq --filter "label=io.audiodown.managed=true"); do
+              docker logs "$container" >"artifacts/plugin-$container.log" 2>&1 || true
+            done
+          fi
+          exit "$status"
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-integration-logs
+          path: artifacts/
+          if-no-files-found: ignore
+      - name: Cleanup
+        if: always()
+        run: |
+          docker ps -aq --filter "label=io.audiodown.managed=true" |
+            xargs -r docker rm -f
+          docker compose down --remove-orphans || true

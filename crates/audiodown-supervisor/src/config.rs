@@ -26,10 +26,7 @@ impl Config {
                 "AUDIODOWN_INSTALLATION_ID_FILE",
                 "/data/plugins/installation-id",
             ),
-            core_token_file: env_path(
-                "AUDIODOWN_CORE_TOKEN_FILE",
-                "/run/audiodown/core.token",
-            ),
+            core_token_file: env_path("AUDIODOWN_CORE_TOKEN_FILE", "/run/audiodown/core.token"),
         }
     }
 }
@@ -42,10 +39,8 @@ pub struct SupervisorIdentity {
 
 pub async fn ensure_identity(config: &Config) -> anyhow::Result<SupervisorIdentity> {
     tokio::fs::create_dir_all(&config.plugin_data).await?;
-    let installation_id = ensure_secret_file(&config.installation_id_file, || {
-        Uuid::new_v4().to_string()
-    })
-    .await?;
+    let installation_id =
+        ensure_secret_file(&config.installation_id_file, || Uuid::new_v4().to_string()).await?;
     let token = ensure_secret_file(&config.core_token_file, || {
         format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
     })

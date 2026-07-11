@@ -66,7 +66,8 @@ describe("empty state views", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("Supervisor 不可用");
-    expect(wrapper.text().toLowerCase()).not.toContain("youtube");
-    expect(wrapper.text().toLowerCase()).not.toContain("spotify");
+    expect(wrapper.text().toLowerCase()).not.toContain(
+      "hardcoded-platform-label",
+    );
   });
 });

@@ -4,13 +4,25 @@ set -eu
 plugin_id="com.audiodown.virtual.content"
 export AUDIODOWN_DEV_MODE=1
 export AUDIODOWN_DEV_TOKEN="${AUDIODOWN_DEV_TOKEN:-virtual-fixture-dev-token}"
+owns_data_dir=0
+if [ -z "${AUDIODOWN_HOST_DATA_DIR:-}" ]; then
+  AUDIODOWN_HOST_DATA_DIR="$(mktemp -d /tmp/audiodown-virtual-data.XXXXXX)"
+  export AUDIODOWN_HOST_DATA_DIR
+  owns_data_dir=1
+fi
 
 cleanup() {
-  docker ps -aq \
-    --filter "label=io.audiodown.managed=true" \
-    --filter "label=io.audiodown.plugin-id=$plugin_id" \
-    | xargs -r docker rm -f >/dev/null 2>&1 || true
-  docker compose down --remove-orphans >/dev/null 2>&1 || true
+  status=$?
+  if [ "${AUDIODOWN_KEEP_CONTAINERS_ON_FAILURE:-0}" != "1" ] || [ "$status" -eq 0 ]; then
+    docker ps -aq \
+      --filter "label=io.audiodown.managed=true" \
+      --filter "label=io.audiodown.plugin-id=$plugin_id" \
+      | xargs -r docker rm -f >/dev/null 2>&1 || true
+    docker compose down --remove-orphans >/dev/null 2>&1 || true
+  fi
+  if [ "$owns_data_dir" -eq 1 ]; then
+    rm -rf "$AUDIODOWN_HOST_DATA_DIR"
+  fi
 }
 trap cleanup EXIT INT TERM
 

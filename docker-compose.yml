@@ -14,7 +14,7 @@ services:
     ports:
       - "${AUDIODOWN_PORT:-18080}:18080"
     volumes:
-      - ./data:/data
+      - "${AUDIODOWN_HOST_DATA_DIR:-./data}:/data"
       - audiodown-control:/run/audiodown
 
   supervisor:
@@ -26,7 +26,7 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./data/plugins:/data/plugins
+      - "${AUDIODOWN_HOST_DATA_DIR:-./data}/plugins:/data/plugins"
       - audiodown-control:/run/audiodown
 
 volumes:

@@ -2,8 +2,7 @@ use audiodown_logging::{redact_json, redact_text};
 
 #[test]
 fn redacts_sensitive_text() {
-    let input =
-        r#"Cookie: session=secret123; Authorization: Bearer token456; phone=13800138000"#;
+    let input = r#"Cookie: session=secret123; Authorization: Bearer token456; phone=13800138000"#;
     let output = redact_text(input);
 
     assert!(!output.contains("secret123"));
