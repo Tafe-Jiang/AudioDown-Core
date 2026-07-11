@@ -7,6 +7,8 @@ use thiserror::Error;
 
 pub mod archive;
 pub mod github;
+mod package;
+pub mod validation;
 
 #[async_trait]
 pub trait RepositorySource: Send + Sync {
@@ -69,4 +71,18 @@ pub enum PluginManagerError {
     ArchiveInvalid,
     #[error("repository archive filesystem operation failed")]
     ArchiveIo,
+    #[error("repository index is invalid")]
+    InvalidRepositoryIndex,
+    #[error("plugin path is invalid")]
+    InvalidPluginPath,
+    #[error("plugin manifest is invalid")]
+    InvalidPluginManifest,
+    #[error("plugin is incompatible with this Core or plugin API version")]
+    IncompatiblePlugin,
+    #[error("repository contains duplicate plugin identifiers")]
+    DuplicatePlugin,
+    #[error("plugin package metadata is invalid")]
+    InvalidPackage,
+    #[error("plugin tree contains a forbidden file or entry")]
+    ForbiddenPluginFile,
 }

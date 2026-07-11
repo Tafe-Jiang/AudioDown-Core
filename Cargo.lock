@@ -104,13 +104,18 @@ name = "audiodown-plugin-manager"
 version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
+ "audiodown-domain",
+ "audiodown-plugin-api",
  "axum",
+ "base64",
  "flate2",
  "futures-util",
  "regex",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tar",
  "tempfile",
  "thiserror",
