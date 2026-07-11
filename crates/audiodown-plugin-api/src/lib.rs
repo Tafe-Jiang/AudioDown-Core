@@ -1,3 +1,4 @@
 #![forbid(unsafe_code)]
 
-pub const CRATE_READY: bool = true;
+pub mod manifest;
+pub mod rpc;

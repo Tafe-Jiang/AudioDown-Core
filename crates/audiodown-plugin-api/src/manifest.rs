@@ -1,0 +1,59 @@
+use audiodown_domain::plugin::PluginId;
+use semver::Version;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginManifest {
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: String,
+    pub id: PluginId,
+    pub name: String,
+    pub version: Version,
+    #[serde(rename = "type")]
+    pub plugin_type: PluginType,
+    pub runtime: RuntimeSpec,
+    pub compatibility: CompatibilitySpec,
+    pub platform: PlatformSpec,
+    pub capabilities: Vec<String>,
+    pub network: NetworkPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginType {
+    Content,
+    Credential,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeSpec {
+    #[serde(rename = "type")]
+    pub kind: RuntimeKind,
+    pub version: String,
+    pub entry: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuntimeKind {
+    Nodejs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompatibilitySpec {
+    #[serde(rename = "pluginApi")]
+    pub plugin_api: String,
+    pub core: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformSpec {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkPolicy {
+    #[serde(rename = "allowedHosts")]
+    pub allowed_hosts: Vec<String>,
+}
