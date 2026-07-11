@@ -3,17 +3,20 @@ use audiodown_domain::{
     log::{LogLevel, StructuredLog},
     plugin::PluginId,
 };
+use audiodown_plugin_api::content::ContentMethod;
 use audiodown_plugin_manager::{
     service::{
-        InstallPluginRecord, LifecycleAuthorizationError, LifecycleRiskAuthorizer,
-        PluginBuildLogRecord, PluginRuntimeControl, PluginRuntimeLogRecord, PluginStateStore,
+        ContentCallEvent, ContentCallLogRecord, InstallPluginRecord, LifecycleAuthorizationError,
+        LifecycleRiskAuthorizer, PluginBuildLogRecord, PluginRuntimeControl,
+        PluginRuntimeLogRecord, PluginStateStore,
     },
     staging::LifecycleRiskGrant,
     DownloadedSnapshot, PluginManagerError, RepositorySource,
 };
 use audiodown_storage::{PluginRecord, RiskGrantRecord, Storage};
 use audiodown_supervisor_protocol::{
-    PluginInstallOperation, PluginInstallOperationList, PluginRemoveResult, PluginRuntimeState,
+    PluginInstallOperation, PluginInstallOperationList, PluginRemoveResult, PluginRpcResult,
+    PluginRuntimeState,
 };
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
@@ -213,6 +216,60 @@ impl PluginStateStore for SqlitePluginManagerStore {
             .await
             .map_err(|_| PluginManagerError::PluginStateUnavailable)
     }
+
+    async fn touch(
+        &self,
+        plugin_id: &PluginId,
+        last_used_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), PluginManagerError> {
+        self.storage
+            .plugins()
+            .touch(plugin_id, last_used_at)
+            .await
+            .map_err(|_| PluginManagerError::PluginStateUnavailable)
+    }
+
+    async fn persist_content_call_log(
+        &self,
+        record: &ContentCallLogRecord,
+    ) -> Result<(), PluginManagerError> {
+        let message = match record.event {
+            ContentCallEvent::Started => "Plugin content call started",
+            ContentCallEvent::Succeeded => "Plugin content call succeeded",
+            ContentCallEvent::Failed => "Plugin content call failed",
+        };
+        self.storage
+            .logs()
+            .append(&StructuredLog {
+                id: Uuid::new_v4(),
+                timestamp: record.timestamp,
+                level: if record.event == ContentCallEvent::Failed {
+                    LogLevel::Warn
+                } else {
+                    LogLevel::Info
+                },
+                component: "plugin-content".to_string(),
+                message: message.to_string(),
+                plugin_id: Some(record.plugin_id.to_string()),
+                plugin_version: non_empty(&record.plugin_version),
+                platform_id: non_empty(&record.platform_id),
+                request_id: Some(record.request_id.clone()),
+                task_id: None,
+                container_id: None,
+                error_code: record.error_code.clone(),
+                context: serde_json::json!({
+                    "method": record.method.capability(),
+                    "event": match record.event {
+                        ContentCallEvent::Started => "started",
+                        ContentCallEvent::Succeeded => "succeeded",
+                        ContentCallEvent::Failed => "failed",
+                    },
+                    "durationMs": record.duration_ms,
+                }),
+            })
+            .await
+            .map_err(|_| PluginManagerError::PluginStateUnavailable)
+    }
 }
 
 pub struct UnavailablePluginStateStore;
@@ -269,6 +326,18 @@ impl PluginRuntimeControl for SupervisorPluginRuntime {
     ) -> Result<PluginRuntimeState, PluginManagerError> {
         self.client
             .inspect_plugin(plugin_id)
+            .await
+            .map_err(runtime_error)
+    }
+
+    async fn invoke(
+        &self,
+        plugin_id: &PluginId,
+        method: ContentMethod,
+        params: serde_json::Value,
+    ) -> Result<PluginRpcResult, PluginManagerError> {
+        self.client
+            .invoke_plugin(plugin_id, method, params)
             .await
             .map_err(runtime_error)
     }

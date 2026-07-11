@@ -2,16 +2,19 @@ use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex as StdMutex, Weak},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use audiodown_domain::plugin::{PluginId, PluginStatus, RunMode};
-use audiodown_plugin_api::manifest::PluginType;
+use audiodown_plugin_api::{
+    content::ContentMethod,
+    manifest::{PluginManifest, PluginType},
+};
 use audiodown_supervisor_protocol::{
     PluginBuildLog, PluginBuildLogStream, PluginInstallArtifact, PluginInstallOperation,
-    PluginInstallOperationList, PluginInstallOperationState, PluginRemoveResult, PluginRuntimeLog,
-    PluginRuntimeState,
+    PluginInstallOperationList, PluginInstallOperationState, PluginRemoveResult, PluginRpcResult,
+    PluginRuntimeLog, PluginRuntimeState,
 };
 use chrono::{DateTime, Utc};
 use secrecy::SecretString;
@@ -100,6 +103,21 @@ pub trait PluginStateStore: Send + Sync {
     ) -> Result<(), PluginManagerError> {
         Err(PluginManagerError::PluginStateUnavailable)
     }
+
+    async fn touch(
+        &self,
+        _plugin_id: &PluginId,
+        _last_used_at: DateTime<Utc>,
+    ) -> Result<(), PluginManagerError> {
+        Err(PluginManagerError::PluginStateUnavailable)
+    }
+
+    async fn persist_content_call_log(
+        &self,
+        _record: &ContentCallLogRecord,
+    ) -> Result<(), PluginManagerError> {
+        Err(PluginManagerError::PluginStateUnavailable)
+    }
 }
 
 #[async_trait]
@@ -108,6 +126,14 @@ pub trait PluginRuntimeControl: Send + Sync {
     async fn stop(&self, plugin_id: &PluginId) -> Result<PluginRuntimeState, PluginManagerError>;
     async fn inspect(&self, plugin_id: &PluginId)
         -> Result<PluginRuntimeState, PluginManagerError>;
+    async fn invoke(
+        &self,
+        _plugin_id: &PluginId,
+        _method: ContentMethod,
+        _params: serde_json::Value,
+    ) -> Result<PluginRpcResult, PluginManagerError> {
+        Err(PluginManagerError::RuntimeUnavailable)
+    }
     async fn remove(&self, plugin_id: &PluginId) -> Result<PluginRemoveResult, PluginManagerError>;
     async fn begin_install(
         &self,
@@ -165,6 +191,7 @@ pub struct PluginManagerService {
     plugin_api_version: Version,
     inspection_permits: Semaphore,
     operation_locks: StdMutex<HashMap<PluginId, Weak<AsyncMutex<()>>>>,
+    active_calls: Arc<StdMutex<HashMap<PluginId, usize>>>,
     automatic_start_failures: StdMutex<HashMap<PluginId, u8>>,
     install_poll_interval: Duration,
     install_wait_timeout: Duration,
@@ -188,6 +215,7 @@ impl PluginManagerService {
             plugin_api_version,
             inspection_permits: Semaphore::new(MAX_CONCURRENT_INSPECTIONS),
             operation_locks: StdMutex::new(HashMap::new()),
+            active_calls: Arc::new(StdMutex::new(HashMap::new())),
             automatic_start_failures: StdMutex::new(HashMap::new()),
             install_poll_interval: DEFAULT_INSTALL_POLL_INTERVAL,
             install_wait_timeout: DEFAULT_INSTALL_WAIT_TIMEOUT,
@@ -477,6 +505,9 @@ impl PluginManagerService {
         let _operation_guard = self
             .try_operation_lock(plugin_id)
             .map_err(map_management_lock_error)?;
+        if self.has_active_calls(plugin_id) {
+            return Err(PluginManagementError::PluginOperationInProgress);
+        }
         let mut record = self.load_plugin(plugin_id).await?;
         if !record.enabled {
             return Err(PluginManagementError::PluginDisabled);
@@ -495,6 +526,9 @@ impl PluginManagerService {
         let _operation_guard = self
             .try_operation_lock(plugin_id)
             .map_err(map_management_lock_error)?;
+        if self.has_active_calls(plugin_id) {
+            return Err(PluginManagementError::PluginOperationInProgress);
+        }
         let mut record = self.load_plugin(plugin_id).await?;
         if let Err(error) = self.stop_transition(&mut record).await {
             self.record_management_failure(&record).await;
@@ -526,6 +560,95 @@ impl PluginManagerService {
         self.save_and_reload(record).await
     }
 
+    pub async fn invoke_content(
+        &self,
+        request: ContentInvocationRequest,
+    ) -> Result<PluginRpcResult, ContentInvocationError> {
+        if request.request_id.is_empty()
+            || request.request_id.len() > 128
+            || request.request_id.contains('\0')
+        {
+            return Err(ContentInvocationError::InvalidRequest);
+        }
+        let operation_guard = self
+            .try_operation_lock(&request.plugin_id)
+            .map_err(|_| ContentInvocationError::PluginBusy)?;
+        let mut record = self
+            .load_plugin(&request.plugin_id)
+            .await
+            .map_err(map_content_management_error)?;
+        validate_content_invocation(&record, request.method)?;
+        let _active_call = self
+            .begin_active_call(&request.plugin_id)
+            .map_err(|_| ContentInvocationError::Internal)?;
+
+        if record.status == PluginStatus::Installing || record.status == PluginStatus::Starting {
+            return Err(ContentInvocationError::RuntimeUnavailable);
+        }
+        if record.status != PluginStatus::Healthy {
+            if let Err(error) = self.start_transition(&mut record).await {
+                self.record_management_failure(&record).await;
+                return Err(map_content_management_error(error));
+            }
+            self.state_store
+                .save_plugin(&record)
+                .await
+                .map_err(|_| ContentInvocationError::Internal)?;
+        }
+        drop(operation_guard);
+
+        let started_at = Instant::now();
+        self.persist_content_call_log(&record, &request, ContentCallEvent::Started, 0, None)
+            .await?;
+        self.state_store
+            .touch(&record.plugin_id, Utc::now())
+            .await
+            .map_err(|_| ContentInvocationError::Internal)?;
+
+        let result = self
+            .runtime
+            .invoke(&record.plugin_id, request.method, request.params.clone())
+            .await;
+        let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match result {
+            Ok(result) => {
+                if result.validate().is_err() {
+                    let error = ContentInvocationError::InvalidResponse;
+                    self.persist_content_call_log(
+                        &record,
+                        &request,
+                        ContentCallEvent::Failed,
+                        duration_ms,
+                        Some(error.standard_code()),
+                    )
+                    .await?;
+                    return Err(error);
+                }
+                self.persist_content_call_log(
+                    &record,
+                    &request,
+                    ContentCallEvent::Succeeded,
+                    duration_ms,
+                    None,
+                )
+                .await?;
+                Ok(result)
+            }
+            Err(_) => {
+                let error = ContentInvocationError::RuntimeUnavailable;
+                self.persist_content_call_log(
+                    &record,
+                    &request,
+                    ContentCallEvent::Failed,
+                    duration_ms,
+                    Some(error.standard_code()),
+                )
+                .await?;
+                Err(error)
+            }
+        }
+    }
+
     pub async fn update_settings(
         &self,
         command: UpdatePluginSettingsCommand,
@@ -536,6 +659,9 @@ impl PluginManagerService {
         let _operation_guard = self
             .try_operation_lock(&command.plugin_id)
             .map_err(map_management_lock_error)?;
+        if !command.enabled && self.has_active_calls(&command.plugin_id) {
+            return Err(PluginManagementError::PluginOperationInProgress);
+        }
         let mut record = self.load_plugin(&command.plugin_id).await?;
         let previous = record.clone();
 
@@ -572,6 +698,9 @@ impl PluginManagerService {
         let _operation_guard = self
             .try_operation_lock(plugin_id)
             .map_err(map_management_lock_error)?;
+        if self.has_active_calls(plugin_id) {
+            return Err(PluginManagementError::PluginOperationInProgress);
+        }
         let mut record = self.load_plugin(plugin_id).await?;
 
         if let Err(error) = self.stop_transition(&mut record).await {
@@ -687,6 +816,9 @@ impl PluginManagerService {
             }
             RunMode::OnDemand => {
                 if record.status != PluginStatus::Healthy {
+                    return ReconcileOutcome::Noop;
+                }
+                if self.has_active_calls(plugin_id) {
                     return ReconcileOutcome::Noop;
                 }
                 let last_used_at = record.last_used_at.unwrap_or(record.updated_at);
@@ -818,6 +950,54 @@ impl PluginManagerService {
         failed.last_error = Some("plugin runtime action failed".to_string());
         failed.updated_at = Utc::now();
         let _ = self.state_store.save_plugin(&failed).await;
+    }
+
+    async fn persist_content_call_log(
+        &self,
+        plugin: &InstallPluginRecord,
+        request: &ContentInvocationRequest,
+        event: ContentCallEvent,
+        duration_ms: u64,
+        error_code: Option<&str>,
+    ) -> Result<(), ContentInvocationError> {
+        self.state_store
+            .persist_content_call_log(&ContentCallLogRecord {
+                request_id: request.request_id.clone(),
+                plugin_id: plugin.plugin_id.clone(),
+                plugin_version: plugin.version.clone(),
+                platform_id: plugin.platform_id.clone(),
+                method: request.method,
+                event,
+                duration_ms,
+                error_code: error_code.map(str::to_string),
+                timestamp: Utc::now(),
+            })
+            .await
+            .map_err(|_| ContentInvocationError::Internal)
+    }
+
+    fn begin_active_call(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<ActiveCallLease, PluginManagerError> {
+        let mut active_calls = self
+            .active_calls
+            .lock()
+            .map_err(|_| PluginManagerError::PluginStateUnavailable)?;
+        let count = active_calls.entry(plugin_id.clone()).or_insert(0);
+        *count = count.saturating_add(1);
+        Ok(ActiveCallLease {
+            active_calls: self.active_calls.clone(),
+            plugin_id: plugin_id.clone(),
+        })
+    }
+
+    fn has_active_calls(&self, plugin_id: &PluginId) -> bool {
+        self.active_calls
+            .lock()
+            .ok()
+            .and_then(|active_calls| active_calls.get(plugin_id).copied())
+            .is_some_and(|count| count > 0)
     }
 
     fn automatic_start_failure_count(&self, plugin_id: &PluginId) -> u8 {
@@ -1175,6 +1355,26 @@ impl PluginManagerService {
     }
 }
 
+struct ActiveCallLease {
+    active_calls: Arc<StdMutex<HashMap<PluginId, usize>>>,
+    plugin_id: PluginId,
+}
+
+impl Drop for ActiveCallLease {
+    fn drop(&mut self) {
+        let Ok(mut active_calls) = self.active_calls.lock() else {
+            return;
+        };
+        let Some(count) = active_calls.get_mut(&self.plugin_id) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            active_calls.remove(&self.plugin_id);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct InstallPluginCommand {
     pub snapshot_id: Uuid,
@@ -1240,6 +1440,34 @@ pub struct PluginRuntimeLogRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct ContentInvocationRequest {
+    pub request_id: String,
+    pub plugin_id: PluginId,
+    pub method: ContentMethod,
+    pub params: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentCallEvent {
+    Started,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContentCallLogRecord {
+    pub request_id: String,
+    pub plugin_id: PluginId,
+    pub plugin_version: String,
+    pub platform_id: String,
+    pub method: ContentMethod,
+    pub event: ContentCallEvent,
+    pub duration_ms: u64,
+    pub error_code: Option<String>,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
 pub struct UpdatePluginSettingsCommand {
     pub plugin_id: PluginId,
     pub enabled: bool,
@@ -1281,6 +1509,42 @@ pub enum PluginManagementError {
     RuntimeUnavailable,
     #[error("plugin management failed")]
     Internal,
+}
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum ContentInvocationError {
+    #[error("content invocation request is invalid")]
+    InvalidRequest,
+    #[error("plugin was not found")]
+    PluginNotFound,
+    #[error("plugin is disabled")]
+    PluginDisabled,
+    #[error("plugin is not a content plugin")]
+    NotContentPlugin,
+    #[error("plugin does not provide the requested capability")]
+    CapabilityMissing,
+    #[error("plugin is busy")]
+    PluginBusy,
+    #[error("plugin runtime is unavailable")]
+    RuntimeUnavailable,
+    #[error("plugin response is invalid")]
+    InvalidResponse,
+    #[error("content invocation failed")]
+    Internal,
+}
+
+impl ContentInvocationError {
+    pub const fn standard_code(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "INVALID_REQUEST",
+            Self::PluginNotFound => "PLUGIN_NOT_FOUND",
+            Self::PluginDisabled => "PLUGIN_DISABLED",
+            Self::NotContentPlugin | Self::CapabilityMissing => "PLUGIN_CAPABILITY_MISSING",
+            Self::PluginBusy | Self::RuntimeUnavailable => "PLUGIN_UNAVAILABLE",
+            Self::InvalidResponse => "PLUGIN_RESPONSE_INVALID",
+            Self::Internal => "PLUGIN_INTERNAL_ERROR",
+        }
+    }
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -1571,6 +1835,44 @@ fn runtime_log_record(
         context: audiodown_logging::redact_json(&log.context),
         container_id: runtime.container_id.clone(),
         timestamp: Utc::now(),
+    }
+}
+
+fn validate_content_invocation(
+    record: &InstallPluginRecord,
+    method: ContentMethod,
+) -> Result<(), ContentInvocationError> {
+    if !record.enabled {
+        return Err(ContentInvocationError::PluginDisabled);
+    }
+    if record.plugin_type != PluginType::Content {
+        return Err(ContentInvocationError::NotContentPlugin);
+    }
+    let manifest: PluginManifest = serde_json::from_value(record.manifest_json.clone())
+        .map_err(|_| ContentInvocationError::Internal)?;
+    if manifest.id != record.plugin_id
+        || manifest.plugin_type != PluginType::Content
+        || !manifest
+            .capabilities
+            .iter()
+            .any(|capability| capability == method.capability())
+    {
+        return Err(ContentInvocationError::CapabilityMissing);
+    }
+    Ok(())
+}
+
+fn map_content_management_error(error: PluginManagementError) -> ContentInvocationError {
+    match error {
+        PluginManagementError::PluginNotFound => ContentInvocationError::PluginNotFound,
+        PluginManagementError::PluginDisabled => ContentInvocationError::PluginDisabled,
+        PluginManagementError::PluginOperationInProgress => ContentInvocationError::PluginBusy,
+        PluginManagementError::RuntimeUnavailable | PluginManagementError::InvalidRuntimeState => {
+            ContentInvocationError::RuntimeUnavailable
+        }
+        PluginManagementError::InvalidPriority | PluginManagementError::Internal => {
+            ContentInvocationError::Internal
+        }
     }
 }
 
