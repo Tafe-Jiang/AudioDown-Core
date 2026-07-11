@@ -77,3 +77,16 @@ React/TSX source is not copied. All runtime components are Vue/Reka UI.
 - Uninstall uses `alert-dialog-demo`, names the selected plugin, and remains
   disabled with other runtime-changing commands when Supervisor is
   unavailable.
+
+## Structured Log Adaptations
+
+- `data-table-demo` becomes a semantic four-column desktop table and a
+  non-scrolling mobile item list. Rows open one details Sheet and preserve the
+  original ISO timestamp in `datetime` and the detail view.
+- Level, component, and text filters are local to the latest list returned by
+  Core. The toolbar does not add backend query parameters, polling, export, or
+  deletion commands.
+- Manual refresh keeps active filters. A failed refresh leaves the previous
+  successful list visible and adds an inline Alert.
+- The initial request uses stable table-shaped Skeleton rows; a genuinely
+  empty response uses a compact `empty-demo` composition.
