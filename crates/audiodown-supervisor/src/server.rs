@@ -28,6 +28,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     prepare_socket(&config.socket_path).await?;
     let listener = UnixListener::bind(&config.socket_path)?;
+    set_socket_permissions(&config.socket_path).await?;
     let authenticator = std::sync::Arc::new(Authenticator::new(identity.token));
     let docker = std::sync::Arc::new(docker);
 
@@ -156,6 +157,15 @@ async fn prepare_socket(path: &Path) -> anyhow::Result<()> {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+async fn set_socket_permissions(path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666)).await?;
     }
     Ok(())
 }

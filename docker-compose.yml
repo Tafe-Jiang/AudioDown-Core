@@ -1,0 +1,33 @@
+services:
+  audiodown:
+    build:
+      context: .
+      dockerfile: docker/core.Dockerfile
+    image: audiodown/core:1.0.0-alpha.1
+    container_name: audiodown
+    restart: unless-stopped
+    depends_on:
+      - supervisor
+    environment:
+      AUDIODOWN_DEV_MODE: "${AUDIODOWN_DEV_MODE:-0}"
+      AUDIODOWN_DEV_TOKEN: "${AUDIODOWN_DEV_TOKEN:-}"
+    ports:
+      - "${AUDIODOWN_PORT:-18080}:18080"
+    volumes:
+      - ./data:/data
+      - audiodown-control:/run/audiodown
+
+  supervisor:
+    build:
+      context: .
+      dockerfile: docker/supervisor.Dockerfile
+    image: audiodown/supervisor:1.0.0-alpha.1
+    container_name: audiodown-supervisor
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/plugins:/data/plugins
+      - audiodown-control:/run/audiodown
+
+volumes:
+  audiodown-control:
