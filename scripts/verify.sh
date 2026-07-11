@@ -16,6 +16,8 @@ cleanup() {
     --filter "label=io.audiodown.managed=true" \
     --filter "label=io.audiodown.plugin-id=$plugin_id" \
     | xargs -r docker rm -f >/dev/null 2>&1 || true
+  docker compose exec -T audiodown \
+    chown -R "$(id -u):$(id -g)" /data >/dev/null 2>&1 || true
   docker compose down --remove-orphans >/dev/null 2>&1 || true
   docker volume rm "$rust_registry_volume" "$rust_target_volume" >/dev/null 2>&1 || true
   rm -rf "$AUDIODOWN_HOST_DATA_DIR"

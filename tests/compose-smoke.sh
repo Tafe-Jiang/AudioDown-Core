@@ -13,12 +13,14 @@ fi
 cleanup() {
   status=$?
   if [ "${AUDIODOWN_KEEP_CONTAINERS_ON_FAILURE:-0}" != "1" ] || [ "$status" -eq 0 ]; then
+    docker compose -f "$compose_file" exec -T audiodown \
+      chown -R "$(id -u):$(id -g)" /data >/dev/null 2>&1 || true
     docker compose -f "$compose_file" down --remove-orphans >/dev/null 2>&1 || true
+    if [ "$owns_data_dir" -eq 1 ]; then
+      rm -rf "$AUDIODOWN_HOST_DATA_DIR"
+    fi
   fi
   rm -f "$config_file"
-  if [ "$owns_data_dir" -eq 1 ]; then
-    rm -rf "$AUDIODOWN_HOST_DATA_DIR"
-  fi
 }
 trap cleanup EXIT INT TERM
 

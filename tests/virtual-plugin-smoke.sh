@@ -18,10 +18,12 @@ cleanup() {
       --filter "label=io.audiodown.managed=true" \
       --filter "label=io.audiodown.plugin-id=$plugin_id" \
       | xargs -r docker rm -f >/dev/null 2>&1 || true
+    docker compose exec -T audiodown \
+      chown -R "$(id -u):$(id -g)" /data >/dev/null 2>&1 || true
     docker compose down --remove-orphans >/dev/null 2>&1 || true
-  fi
-  if [ "$owns_data_dir" -eq 1 ]; then
-    rm -rf "$AUDIODOWN_HOST_DATA_DIR"
+    if [ "$owns_data_dir" -eq 1 ]; then
+      rm -rf "$AUDIODOWN_HOST_DATA_DIR"
+    fi
   fi
 }
 trap cleanup EXIT INT TERM
