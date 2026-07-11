@@ -4,6 +4,102 @@ export interface EmptyStateResponse {
   actionLabel: string;
 }
 
+export interface ContentEmptyState extends EmptyStateResponse {}
+
+export interface ContentSource {
+  platformId: string;
+  pluginId: string;
+  pluginName: string;
+  pluginVersion: string;
+}
+
+export type ContentResourceType = "album" | "track" | "category";
+
+export interface ContentItem {
+  resourceType: ContentResourceType;
+  resourceId: string;
+  canonicalId?: string;
+  title: string;
+  subtitle?: string;
+  description?: string;
+}
+
+export interface SourcedContentItem {
+  item: ContentItem;
+  source: ContentSource;
+}
+
+export interface ContentFailure {
+  code: string;
+  summary: string;
+  pluginId: string;
+  platformId: string;
+}
+
+export type DiscoverLayout =
+  | "hero-carousel"
+  | "album-grid"
+  | "horizontal-list"
+  | "ranked-list"
+  | "category-grid";
+
+export interface DiscoverSection {
+  id: string;
+  title: string;
+  layout: DiscoverLayout;
+  items: SourcedContentItem[];
+  source: ContentSource;
+}
+
+export interface ContentEnvelope {
+  items: SourcedContentItem[];
+  sections: DiscoverSection[];
+  nextCursor: string | null;
+  failures: ContentFailure[];
+  emptyState: ContentEmptyState | null;
+}
+
+export interface ContentQueryOptions {
+  platformId?: string;
+  pluginId?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface SearchOptions extends ContentQueryOptions {
+  query: string;
+}
+
+export interface DiscoverOptions extends ContentQueryOptions {}
+
+export interface AlbumDetail {
+  resourceId: string;
+  canonicalId?: string;
+  title: string;
+  creator?: string;
+  description?: string;
+  trackCount?: number;
+}
+
+export interface AlbumResponse {
+  album: AlbumDetail;
+  source: ContentSource;
+}
+
+export interface TrackItem {
+  resourceId: string;
+  canonicalId?: string;
+  title: string;
+  sequence?: number;
+  durationSeconds?: number;
+}
+
+export interface TracksResponse {
+  items: TrackItem[];
+  source: ContentSource;
+  nextCursor: string | null;
+}
+
 export interface SupervisorStatus {
   available: boolean;
   error: string | null;
@@ -30,6 +126,10 @@ export interface PluginItem {
   priority: number;
   sourceUrl: string;
   commitSha: string;
+  capabilities: string[];
+  searchEnabled: boolean | null;
+  discoverEnabled: boolean | null;
+  isDefaultContentPlugin: boolean;
 }
 
 export interface PluginListResponse {
@@ -37,6 +137,15 @@ export interface PluginListResponse {
 }
 
 export interface PluginSettings {
+  enabled: boolean;
+  runMode: PluginRunMode;
+  priority: number;
+  searchEnabled?: boolean;
+  discoverEnabled?: boolean;
+  defaultContentPluginId?: string;
+}
+
+export interface PluginRuntimeSettings {
   enabled: boolean;
   runMode: PluginRunMode;
   priority: number;
@@ -88,9 +197,26 @@ export interface RepositoryPreview {
 }
 
 interface JsonRequestOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
   headers?: Record<string, string>;
+}
+
+interface ApiErrorBody {
+  code?: string;
+  message?: string;
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
 }
 
 async function requestJson<T>(
@@ -121,17 +247,126 @@ async function request(
     body,
   });
   if (!response.ok) {
-    throw new Error(`Core API request failed with status ${response.status}`);
+    const error = (await response
+      .json()
+      .catch(() => null)) as ApiErrorBody | null;
+    throw new ApiError(
+      response.status,
+      error?.code ?? "CORE_API_ERROR",
+      error?.message ?? `Core API request failed with status ${response.status}`,
+    );
   }
   return response;
 }
 
+function queryString(values: Record<string, string | number | undefined>) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== undefined && value !== "") {
+      query.set(key, String(value));
+    }
+  }
+  const serialized = query.toString();
+  return serialized.length > 0 ? `?${serialized}` : "";
+}
+
+function legacyEmptyState(envelope: ContentEnvelope): EmptyStateResponse {
+  return (
+    envelope.emptyState ?? {
+      reason: "NO_CONTENT_PLUGINS",
+      title: "暂无内容插件",
+      actionLabel: "管理插件",
+    }
+  );
+}
+
+function isLegacyEmptyState(
+  response: ContentEnvelope | EmptyStateResponse,
+): response is EmptyStateResponse {
+  return (
+    "reason" in response &&
+    response.reason === "NO_CONTENT_PLUGINS" &&
+    typeof response.title === "string" &&
+    typeof response.actionLabel === "string"
+  );
+}
+
+function emptyEnvelope(emptyState: EmptyStateResponse): ContentEnvelope {
+  return {
+    items: [],
+    sections: [],
+    nextCursor: null,
+    failures: [],
+    emptyState,
+  };
+}
+
+function search(query: string): Promise<EmptyStateResponse>;
+function search(options: SearchOptions): Promise<ContentEnvelope>;
+async function search(
+  input: string | SearchOptions,
+): Promise<EmptyStateResponse | ContentEnvelope> {
+  const options = typeof input === "string" ? { query: input } : input;
+  const response = await requestJson<ContentEnvelope | EmptyStateResponse>(
+    `/api/v1/search${queryString({
+      q: options.query,
+      platformId: options.platformId,
+      pluginId: options.pluginId,
+      cursor: options.cursor,
+      limit: options.limit,
+    })}`,
+  );
+  if (typeof input === "string") {
+    return isLegacyEmptyState(response)
+      ? response
+      : legacyEmptyState(response);
+  }
+  return isLegacyEmptyState(response) ? emptyEnvelope(response) : response;
+}
+
+function discover(): Promise<EmptyStateResponse>;
+function discover(options: DiscoverOptions): Promise<ContentEnvelope>;
+async function discover(
+  options?: DiscoverOptions,
+): Promise<EmptyStateResponse | ContentEnvelope> {
+  const response = await requestJson<ContentEnvelope | EmptyStateResponse>(
+    `/api/v1/discover${queryString({
+      platformId: options?.platformId,
+      pluginId: options?.pluginId,
+      cursor: options?.cursor,
+      limit: options?.limit,
+    })}`,
+  );
+  if (options === undefined) {
+    return isLegacyEmptyState(response)
+      ? response
+      : legacyEmptyState(response);
+  }
+  return isLegacyEmptyState(response) ? emptyEnvelope(response) : response;
+}
+
 export const api = {
-  discover: () => requestJson<EmptyStateResponse>("/api/v1/discover"),
-  search: (query: string) =>
-    requestJson<EmptyStateResponse>(
-      `/api/v1/search?q=${encodeURIComponent(query)}`,
+  discover,
+  search,
+  categories: (options: Pick<ContentQueryOptions, "platformId" | "pluginId"> = {}) =>
+    requestJson<ContentEnvelope>(
+      `/api/v1/categories${queryString(options)}`,
     ),
+  album: (pluginId: string, resourceId: string) =>
+    requestJson<AlbumResponse>("/api/v1/albums/get", {
+      method: "POST",
+      body: { pluginId, resourceId },
+    }),
+  tracks: (
+    pluginId: string,
+    albumResourceId: string,
+    cursor?: string,
+    limit = 20,
+  ) =>
+    requestJson<TracksResponse>("/api/v1/tracks/list", {
+      method: "POST",
+      body: { pluginId, albumResourceId, cursor, limit },
+    }),
   plugins: () => requestJson<PluginListResponse>("/api/v1/plugins"),
   logs: () => requestJson<LogListResponse>("/api/v1/logs"),
   system: () => requestJson<SystemResponse>("/api/v1/system"),
@@ -157,12 +392,36 @@ export const api = {
             : undefined,
       },
     ),
-  updatePlugin: (pluginId: string, settings: PluginSettings) =>
+  updatePlugin: (pluginId: string, settings: PluginRuntimeSettings) =>
     requestJson<PluginItem>(
       `/api/v1/plugins/${encodeURIComponent(pluginId)}`,
       {
         method: "PATCH",
         body: settings,
+      },
+    ),
+  updateContentSettings: (
+    pluginId: string,
+    searchEnabled: boolean,
+    discoverEnabled: boolean,
+  ) =>
+    requestJson<{
+      pluginId: string;
+      searchEnabled: boolean;
+      discoverEnabled: boolean;
+    }>(
+      `/api/v1/plugins/${encodeURIComponent(pluginId)}/content-settings`,
+      {
+        method: "PATCH",
+        body: { searchEnabled, discoverEnabled },
+      },
+    ),
+  setDefaultContentPlugin: (platformId: string, pluginId: string) =>
+    requestJson<{ platformId: string; pluginId: string }>(
+      `/api/v1/platforms/${encodeURIComponent(platformId)}/default-content-plugin`,
+      {
+        method: "PUT",
+        body: { pluginId },
       },
     ),
   startPlugin: (pluginId: string) =>

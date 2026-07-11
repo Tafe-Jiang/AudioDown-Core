@@ -199,6 +199,28 @@ async fn exposes_discover_categories_source_bound_album_tracks_and_settings() {
     assert_eq!(default["platformId"], "virtual");
     assert_eq!(default["pluginId"], VIRTUAL_BACKUP);
 
+    let (status, plugins) = fixture.get("/api/v1/plugins").await;
+    assert_eq!(status, StatusCode::OK);
+    let backup = plugins["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|plugin| plugin["pluginId"] == VIRTUAL_BACKUP)
+        .unwrap();
+    assert_eq!(
+        backup["capabilities"],
+        json!([
+            "content.search",
+            "content.discover",
+            "content.categories",
+            "content.album.get",
+            "content.tracks.list"
+        ])
+    );
+    assert_eq!(backup["searchEnabled"], false);
+    assert_eq!(backup["discoverEnabled"], true);
+    assert_eq!(backup["isDefaultContentPlugin"], true);
+
     let (status, error) = fixture
         .json_request(
             "PUT",

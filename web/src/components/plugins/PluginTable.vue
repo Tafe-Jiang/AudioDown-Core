@@ -27,6 +27,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -181,7 +182,36 @@ async function saveSettings(settings: PluginSettings) {
   busy[plugin.pluginId] = true;
   setError(plugin.pluginId);
   try {
-    await api.updatePlugin(plugin.pluginId, settings);
+    await api.updatePlugin(plugin.pluginId, {
+      enabled: settings.enabled,
+      runMode: settings.runMode,
+      priority: settings.priority,
+    });
+    if (
+      plugin.pluginType === "content" &&
+      settings.searchEnabled !== undefined &&
+      settings.discoverEnabled !== undefined
+    ) {
+      await api.updateContentSettings(
+        plugin.pluginId,
+        settings.searchEnabled,
+        settings.discoverEnabled,
+      );
+    }
+    if (
+      plugin.pluginType === "content" &&
+      settings.defaultContentPluginId &&
+      !props.items.some(
+        (candidate) =>
+          candidate.pluginId === settings.defaultContentPluginId &&
+          candidate.isDefaultContentPlugin,
+      )
+    ) {
+      await api.setDefaultContentPlugin(
+        plugin.platformId,
+        settings.defaultContentPluginId,
+      );
+    }
     await refreshItems();
     closeSettings();
     toast.success("插件设置已保存");
@@ -242,6 +272,19 @@ async function confirmUninstall() {
                   <span class="block truncate text-xs text-muted-foreground">
                     {{ plugin.pluginId }}
                   </span>
+                  <div
+                    v-if="plugin.capabilities.length > 0"
+                    class="mt-1 flex min-w-0 flex-wrap gap-1"
+                  >
+                    <Badge
+                      v-for="capability in plugin.capabilities"
+                      :key="capability"
+                      variant="secondary"
+                      class="max-w-48"
+                    >
+                      <span class="truncate">{{ capability }}</span>
+                    </Badge>
+                  </div>
                 </div>
               </TableCell>
               <TableCell>{{ plugin.pluginType }}</TableCell>
@@ -321,6 +364,19 @@ async function confirmUninstall() {
           <span class="block break-all text-xs text-muted-foreground">
             {{ plugin.pluginId }}
           </span>
+          <div
+            v-if="plugin.capabilities.length > 0"
+            class="mt-1 flex min-w-0 flex-wrap gap-1"
+          >
+            <Badge
+              v-for="capability in plugin.capabilities"
+              :key="capability"
+              variant="secondary"
+              class="max-w-full"
+            >
+              <span class="truncate">{{ capability }}</span>
+            </Badge>
+          </div>
         </div>
         <StatusBadge
           :tone="statusPresentation(plugin.status).tone"
@@ -375,6 +431,7 @@ async function confirmUninstall() {
     <PluginSettingsSheet
       :open="settingsOpen"
       :plugin="settingsPlugin"
+      :platform-plugins="items"
       :busy="
         settingsPlugin ? pluginBusy(settingsPlugin.pluginId) : false
       "

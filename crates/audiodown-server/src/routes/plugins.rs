@@ -44,6 +44,10 @@ pub struct PluginItem {
     pub priority: i64,
     pub source_url: String,
     pub commit_sha: String,
+    pub capabilities: Vec<String>,
+    pub search_enabled: Option<bool>,
+    pub discover_enabled: Option<bool>,
+    pub is_default_content_plugin: bool,
 }
 
 pub async fn list(State(state): State<AppState>) -> ApiResult<PluginListResponse> {
@@ -53,7 +57,10 @@ pub async fn list(State(state): State<AppState>) -> ApiResult<PluginListResponse
         .list()
         .await
         .map_err(internal_error)?;
-    let items = records.into_iter().map(plugin_item_from_storage).collect();
+    let mut items = Vec::with_capacity(records.len());
+    for record in records {
+        items.push(plugin_item_from_storage(&state, record).await?);
+    }
     Ok(Json(PluginListResponse { items }))
 }
 
@@ -127,7 +134,7 @@ pub async fn install(
         .await
         .map_err(install_error)?;
 
-    Ok(Json(plugin_item_from_manager(installed)))
+    Ok(Json(plugin_item_from_manager(&state, installed).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,7 +212,7 @@ pub async fn register_fixture(
         .await
         .map_err(internal_error)?;
 
-    Ok(Json(plugin_item_from_storage(record)))
+    Ok(Json(plugin_item_from_storage(&state, record).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,7 +239,7 @@ pub async fn update(
         })
         .await
         .map_err(management_error)?;
-    Ok(Json(plugin_item_from_manager(record)))
+    Ok(Json(plugin_item_from_manager(&state, record).await?))
 }
 
 pub async fn uninstall(
@@ -383,8 +390,19 @@ fn management_error(error: PluginManagementError) -> (StatusCode, Json<ApiError>
     }
 }
 
-fn plugin_item_from_storage(record: PluginRecord) -> PluginItem {
-    PluginItem {
+async fn plugin_item_from_storage(
+    state: &AppState,
+    record: PluginRecord,
+) -> Result<PluginItem, (StatusCode, Json<ApiError>)> {
+    let capabilities = manifest_capabilities(&record.manifest_json);
+    let (search_enabled, discover_enabled, is_default_content_plugin) = content_routing_metadata(
+        state,
+        &record.plugin_id,
+        record.plugin_type,
+        &record.platform_id,
+    )
+    .await?;
+    Ok(PluginItem {
         plugin_id: record.plugin_id.to_string(),
         plugin_type: record.plugin_type,
         platform_id: record.platform_id,
@@ -396,11 +414,26 @@ fn plugin_item_from_storage(record: PluginRecord) -> PluginItem {
         priority: record.priority,
         source_url: record.source_ref,
         commit_sha: record.commit_sha.unwrap_or_default(),
-    }
+        capabilities,
+        search_enabled,
+        discover_enabled,
+        is_default_content_plugin,
+    })
 }
 
-fn plugin_item_from_manager(record: InstallPluginRecord) -> PluginItem {
-    PluginItem {
+async fn plugin_item_from_manager(
+    state: &AppState,
+    record: InstallPluginRecord,
+) -> Result<PluginItem, (StatusCode, Json<ApiError>)> {
+    let capabilities = manifest_capabilities(&record.manifest_json);
+    let (search_enabled, discover_enabled, is_default_content_plugin) = content_routing_metadata(
+        state,
+        &record.plugin_id,
+        record.plugin_type,
+        &record.platform_id,
+    )
+    .await?;
+    Ok(PluginItem {
         plugin_id: record.plugin_id.to_string(),
         plugin_type: record.plugin_type,
         platform_id: record.platform_id,
@@ -412,7 +445,54 @@ fn plugin_item_from_manager(record: InstallPluginRecord) -> PluginItem {
         priority: record.priority,
         source_url: record.source_ref,
         commit_sha: record.commit_sha,
+        capabilities,
+        search_enabled,
+        discover_enabled,
+        is_default_content_plugin,
+    })
+}
+
+fn manifest_capabilities(manifest_json: &serde_json::Value) -> Vec<String> {
+    manifest_json
+        .get("capabilities")
+        .and_then(serde_json::Value::as_array)
+        .map(|capabilities| {
+            capabilities
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn content_routing_metadata(
+    state: &AppState,
+    plugin_id: &PluginId,
+    plugin_type: audiodown_plugin_api::manifest::PluginType,
+    platform_id: &str,
+) -> Result<(Option<bool>, Option<bool>, bool), (StatusCode, Json<ApiError>)> {
+    if plugin_type != audiodown_plugin_api::manifest::PluginType::Content {
+        return Ok((None, None, false));
     }
+    let participation = state
+        .storage
+        .content_routing()
+        .participation(plugin_id)
+        .await
+        .map_err(internal_error)?;
+    let is_default = state
+        .storage
+        .content_routing()
+        .default_for_platform(platform_id)
+        .await
+        .map_err(internal_error)?
+        .is_some_and(|default| default == *plugin_id);
+    Ok((
+        Some(participation.search_enabled),
+        Some(participation.discover_enabled),
+        is_default,
+    ))
 }
 
 fn runtime_state(record: &InstallPluginRecord) -> PluginRuntimeState {

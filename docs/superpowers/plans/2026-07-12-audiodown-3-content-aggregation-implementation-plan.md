@@ -23,7 +23,7 @@ This plan does not add credentials, Cookie handling, HTTP proxying, download pla
 
 ## Progress Snapshot
 
-As of 2026-07-12, Tasks 1 through 10 are complete and verified. Tasks 11 through 14 remain pending. The current `main` push is an explicit intermediate checkpoint requested by the user; phase three is not complete until Task 14 and the clean-checkout verification pass.
+As of 2026-07-12, Tasks 1 through 11 are complete and verified. Tasks 12 through 14 remain pending. The latest `main` push through Task 10 was an explicit intermediate checkpoint requested by the user; phase three is not complete until Task 14 and the clean-checkout verification pass.
 
 ## Locked Decisions
 
@@ -545,6 +545,8 @@ git commit -m "阶段3：添加虚拟内容插件集" \
 ### Task 11: Add Typed Vue Content API and Shared Result Components
 
 **Files:**
+- Modify: `crates/audiodown-server/src/routes/plugins.rs`
+- Modify: `crates/audiodown-server/tests/content_api.rs`
 - Modify: `web/src/api/client.ts`
 - Create: `web/src/components/content/ContentSourceBadge.vue`
 - Create: `web/src/components/content/ContentItemRow.vue`
@@ -574,9 +576,12 @@ Expected: FAIL because content types and components do not exist.
 
 Adapt the reviewed shadcn tabs, pagination, select, badge, alert, skeleton, and scroll-area patterns to Vue/Reka. Keep controls compact, responsive, and consistent with the existing phase-two shell. Do not nest cards or add gradients.
 
+Expose the manifest capabilities and persisted content participation/default state through the existing plugin-list response so the settings UI initializes from Core-owned data. Do not add a second settings source or infer defaults in the browser.
+
 - [ ] **Step 4: Run Vue component checks**
 
 ```bash
+cargo test -p audiodown-server --test content_api
 cd web && npm test -- --run src/components/content/content-components.test.ts src/components/plugins/plugin-management.test.ts
 cd web && npm run typecheck
 ```
@@ -584,7 +589,7 @@ cd web && npm run typecheck
 - [ ] **Step 5: Commit**
 
 ```bash
-git add web
+git add crates/audiodown-server web
 git commit -m "阶段3：构建内容结果组件" \
   -m "增加类型化内容 API、来源标识、失败提示和分页控件。"
 ```

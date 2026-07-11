@@ -19,6 +19,14 @@ const alpha: PluginItem = {
   priority: 25,
   sourceUrl: "https://github.com/example/virtual-alpha",
   commitSha: "0123456789abcdef0123456789abcdef01234567",
+  capabilities: [
+    "content.search",
+    "content.discover",
+    "content.categories",
+  ],
+  searchEnabled: true,
+  discoverEnabled: false,
+  isDefaultContentPlugin: false,
 };
 
 const beta: PluginItem = {
@@ -31,6 +39,10 @@ const beta: PluginItem = {
   status: "running",
   runMode: "always",
   priority: 80,
+  capabilities: [],
+  searchEnabled: null,
+  discoverEnabled: null,
+  isDefaultContentPlugin: false,
 };
 
 const passthrough = defineComponent({
@@ -219,11 +231,12 @@ describe("installed plugin management", () => {
     ).toBe("");
   });
 
-  it("edits run mode and priority in a named settings sheet", async () => {
+  it("edits runtime and content routing in a named settings sheet", async () => {
     const wrapper = mount(PluginSettingsSheet, {
       props: {
         open: true,
         plugin: alpha,
+        platformPlugins: [alpha],
         busy: false,
         error: "",
       },
@@ -233,9 +246,17 @@ describe("installed plugin management", () => {
     });
 
     expect(wrapper.text()).toContain(`设置 ${alpha.name}`);
-    wrapper.findComponent(selectStub).vm.$emit("update:modelValue", "always");
+    const selects = wrapper.findAllComponents(selectStub);
+    selects[0].vm.$emit("update:modelValue", "always");
+    selects[1].vm.$emit("update:modelValue", alpha.pluginId);
     await nextTick();
     await wrapper.get('input[name="priority"]').setValue(7);
+    await wrapper
+      .get('[data-content-setting="search"]')
+      .trigger("click");
+    await wrapper
+      .get('[data-content-setting="discover"]')
+      .trigger("click");
     await wrapper.get("form").trigger("submit");
 
     expect(wrapper.emitted("save")?.[0]).toEqual([
@@ -243,8 +264,13 @@ describe("installed plugin management", () => {
         enabled: alpha.enabled,
         runMode: "always",
         priority: 7,
+        searchEnabled: false,
+        discoverEnabled: true,
+        defaultContentPluginId: alpha.pluginId,
       },
     ]);
+    expect(wrapper.text()).toContain("content.search");
+    expect(wrapper.text()).toContain("默认内容插件");
   });
 
   it("uses labeled icon commands and requests named destructive actions", async () => {

@@ -8,6 +8,7 @@ import type {
   PluginSettings,
 } from "@/api/client";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Field,
@@ -30,10 +31,12 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Switch } from "@/components/ui/switch";
 
 const props = defineProps<{
   open: boolean;
   plugin: PluginItem | null;
+  platformPlugins?: PluginItem[];
   busy: boolean;
   error: string;
 }>();
@@ -45,8 +48,28 @@ const emit = defineEmits<{
 
 const runMode = ref<PluginRunMode>("on_demand");
 const priority = ref(100);
+const searchEnabled = ref(false);
+const discoverEnabled = ref(false);
+const defaultContentPluginId = ref("");
 const formId = computed(
   () => `plugin-settings-${props.plugin?.pluginId ?? "none"}`,
+);
+const isContentPlugin = computed(
+  () => props.plugin?.pluginType === "content",
+);
+const contentCapabilities = computed(
+  () =>
+    props.plugin?.capabilities.filter((capability) =>
+      capability.startsWith("content."),
+    ) ?? [],
+);
+const platformContentPlugins = computed(
+  () =>
+    props.platformPlugins?.filter(
+      (plugin) =>
+        plugin.pluginType === "content" &&
+        plugin.platformId === props.plugin?.platformId,
+    ) ?? [],
 );
 
 function resetForm() {
@@ -55,6 +78,12 @@ function resetForm() {
   }
   runMode.value = props.plugin.runMode;
   priority.value = props.plugin.priority;
+  searchEnabled.value = props.plugin.searchEnabled ?? false;
+  discoverEnabled.value = props.plugin.discoverEnabled ?? false;
+  defaultContentPluginId.value =
+    platformContentPlugins.value.find(
+      (plugin) => plugin.isDefaultContentPlugin,
+    )?.pluginId ?? "";
 }
 
 function save() {
@@ -65,6 +94,14 @@ function save() {
     enabled: props.plugin.enabled,
     runMode: runMode.value,
     priority: Number(priority.value),
+    ...(isContentPlugin.value
+      ? {
+          searchEnabled: searchEnabled.value,
+          discoverEnabled: discoverEnabled.value,
+          defaultContentPluginId:
+            defaultContentPluginId.value || undefined,
+        }
+      : {}),
   });
 }
 
@@ -128,6 +165,89 @@ watch(
           />
           <FieldDescription>数值范围 0 至 1000。</FieldDescription>
         </Field>
+
+        <template v-if="isContentPlugin">
+          <Field>
+            <FieldLabel>内容能力</FieldLabel>
+            <div class="flex min-w-0 flex-wrap gap-1.5">
+              <Badge
+                v-for="capability in contentCapabilities"
+                :key="capability"
+                variant="secondary"
+                class="max-w-full"
+              >
+                <span class="truncate">{{ capability }}</span>
+              </Badge>
+            </div>
+          </Field>
+
+          <Field>
+            <div class="flex items-center justify-between gap-3">
+              <div class="grid gap-0.5">
+                <FieldLabel :for="`${formId}-search`">
+                  参与搜索
+                </FieldLabel>
+                <FieldDescription>
+                  允许此插件参与平台搜索聚合。
+                </FieldDescription>
+              </div>
+              <Switch
+                :id="`${formId}-search`"
+                v-model="searchEnabled"
+                data-content-setting="search"
+                :disabled="busy"
+                aria-label="参与搜索"
+              />
+            </div>
+          </Field>
+
+          <Field>
+            <div class="flex items-center justify-between gap-3">
+              <div class="grid gap-0.5">
+                <FieldLabel :for="`${formId}-discover`">
+                  参与发现
+                </FieldLabel>
+                <FieldDescription>
+                  允许此插件参与平台发现聚合。
+                </FieldDescription>
+              </div>
+              <Switch
+                :id="`${formId}-discover`"
+                v-model="discoverEnabled"
+                data-content-setting="discover"
+                :disabled="busy"
+                aria-label="参与发现"
+              />
+            </div>
+          </Field>
+
+          <Field>
+            <FieldLabel for="default-content-plugin">
+              默认内容插件
+            </FieldLabel>
+            <Select
+              v-model="defaultContentPluginId"
+              name="default-content-plugin"
+              :disabled="busy"
+            >
+              <SelectTrigger id="default-content-plugin" class="w-full">
+                <SelectValue placeholder="未设置" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="candidate in platformContentPlugins"
+                  :key="candidate.pluginId"
+                  :value="candidate.pluginId"
+                >
+                  {{ candidate.name }} {{ candidate.version }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              默认插件优先处理该平台的首次内容请求。
+            </FieldDescription>
+          </Field>
+        </template>
 
         <Alert v-if="error" variant="destructive">
           <TriangleAlert aria-hidden="true" />
