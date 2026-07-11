@@ -2,6 +2,7 @@ use std::{
     env,
     net::SocketAddr,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use secrecy::SecretString;
@@ -21,6 +22,8 @@ pub struct Config {
     pub dev_token: Option<SecretString>,
     pub github_api_base: String,
     pub github_archive_base: String,
+    pub plugin_reconcile_interval: Duration,
+    pub plugin_idle_timeout: Duration,
 }
 
 impl Config {
@@ -33,6 +36,14 @@ impl Config {
         let github_api_base = env_value("AUDIODOWN_GITHUB_API_BASE", DEFAULT_GITHUB_API_BASE);
         let github_archive_base =
             env_value("AUDIODOWN_GITHUB_ARCHIVE_BASE", DEFAULT_GITHUB_ARCHIVE_BASE);
+        let plugin_reconcile_interval = Self::validate_lifecycle_seconds(
+            env_value("AUDIODOWN_PLUGIN_RECONCILE_SECONDS", "30").parse()?,
+            dev_mode,
+        )?;
+        let plugin_idle_timeout = Self::validate_lifecycle_seconds(
+            env_value("AUDIODOWN_PLUGIN_IDLE_TIMEOUT_SECONDS", "900").parse()?,
+            dev_mode,
+        )?;
         if !dev_mode
             && (github_api_base != DEFAULT_GITHUB_API_BASE
                 || github_archive_base != DEFAULT_GITHUB_ARCHIVE_BASE)
@@ -60,6 +71,8 @@ impl Config {
                 .map(SecretString::new),
             github_api_base,
             github_archive_base,
+            plugin_reconcile_interval,
+            plugin_idle_timeout,
         })
     }
 
@@ -75,7 +88,19 @@ impl Config {
             dev_token: Some(SecretString::new(token.to_string())),
             github_api_base: DEFAULT_GITHUB_API_BASE.to_string(),
             github_archive_base: DEFAULT_GITHUB_ARCHIVE_BASE.to_string(),
+            plugin_reconcile_interval: Duration::from_secs(30),
+            plugin_idle_timeout: Duration::from_secs(900),
         }
+    }
+
+    pub fn validate_lifecycle_seconds(seconds: u64, dev_mode: bool) -> anyhow::Result<Duration> {
+        if seconds == 0 {
+            anyhow::bail!("plugin lifecycle intervals must be positive");
+        }
+        if seconds < 5 && !dev_mode {
+            anyhow::bail!("plugin lifecycle intervals below five seconds require developer mode");
+        }
+        Ok(Duration::from_secs(seconds))
     }
 }
 

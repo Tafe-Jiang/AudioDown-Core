@@ -42,7 +42,7 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-r
 thiserror = "2.0"
 tar = "0.4"
 subtle = "2.6"
-tokio = { version = "1.46", features = ["macros", "rt-multi-thread", "net", "signal", "time", "fs", "sync", "process", "io-util"] }
+tokio = { version = "1.46", features = ["macros", "rt-multi-thread", "net", "signal", "time", "fs", "sync", "process", "io-util", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "request-id", "trace", "fs"] }
 tracing = "0.1"

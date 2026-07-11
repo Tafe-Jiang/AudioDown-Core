@@ -4,6 +4,7 @@ use audiodown_plugin_manager::{github::GitHubClient, service::PluginManagerServi
 use audiodown_server::{
     app::build_router,
     config::Config,
+    lifecycle::run_lifecycle_reconciler,
     plugin_manager_adapters::{
         ConfiguredLifecycleRiskAuthorizer, SqlitePluginManagerStore, SupervisorPluginRuntime,
     },
@@ -11,7 +12,7 @@ use audiodown_server::{
     supervisor::UnixSupervisorClient,
 };
 use audiodown_storage::Storage;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::watch};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -53,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
     if let Err(error) = plugin_manager.reconcile_install_operations().await {
         tracing::warn!(error = %error, "Plugin install reconciliation will retry on next startup");
     }
+    let lifecycle_manager = plugin_manager.clone();
     let state = AppState::new(
         storage,
         semver::Version::parse(env!("CARGO_PKG_VERSION"))?,
@@ -64,9 +66,24 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(config.bind).await?;
     tracing::info!(address = %config.bind, "AudioDown Core listening");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let (lifecycle_cancel, lifecycle_receiver) = watch::channel(false);
+    let lifecycle_task = tokio::spawn(run_lifecycle_reconciler(
+        lifecycle_manager,
+        config.plugin_reconcile_interval,
+        config.plugin_idle_timeout,
+        lifecycle_receiver,
+    ));
+    let shutdown_cancel = lifecycle_cancel.clone();
+    let shutdown = async move {
+        shutdown_signal().await;
+        let _ = shutdown_cancel.send(true);
+    };
+    let serve_result = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await;
+    let _ = lifecycle_cancel.send(true);
+    let _ = lifecycle_task.await;
+    serve_result?;
     Ok(())
 }
 

@@ -165,6 +165,7 @@ pub struct PluginManagerService {
     plugin_api_version: Version,
     inspection_permits: Semaphore,
     operation_locks: StdMutex<HashMap<PluginId, Weak<AsyncMutex<()>>>>,
+    automatic_start_failures: StdMutex<HashMap<PluginId, u8>>,
     install_poll_interval: Duration,
     install_wait_timeout: Duration,
 }
@@ -187,6 +188,7 @@ impl PluginManagerService {
             plugin_api_version,
             inspection_permits: Semaphore::new(MAX_CONCURRENT_INSPECTIONS),
             operation_locks: StdMutex::new(HashMap::new()),
+            automatic_start_failures: StdMutex::new(HashMap::new()),
             install_poll_interval: DEFAULT_INSTALL_POLL_INTERVAL,
             install_wait_timeout: DEFAULT_INSTALL_WAIT_TIMEOUT,
         }
@@ -601,6 +603,114 @@ impl PluginManagerService {
             .map_err(|_| PluginManagementError::Internal)
     }
 
+    pub async fn reconcile_due_plugins(
+        &self,
+        now: DateTime<Utc>,
+        idle_timeout: Duration,
+    ) -> Result<LifecycleReconcileReport, PluginManagementError> {
+        let mut plugin_ids = self
+            .state_store
+            .list_install_records()
+            .await
+            .map_err(|_| PluginManagementError::Internal)?
+            .into_iter()
+            .map(|record| record.plugin_id)
+            .collect::<Vec<_>>();
+        plugin_ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+
+        let mut report = LifecycleReconcileReport::default();
+        for plugin_id in plugin_ids {
+            report.scanned += 1;
+            match self
+                .try_reconcile_plugin(&plugin_id, now, idle_timeout)
+                .await
+            {
+                ReconcileOutcome::Started => report.started += 1,
+                ReconcileOutcome::Stopped => report.stopped += 1,
+                ReconcileOutcome::SkippedBusy => report.skipped_busy += 1,
+                ReconcileOutcome::Failed => report.failed += 1,
+                ReconcileOutcome::Noop => {}
+            }
+        }
+        Ok(report)
+    }
+
+    async fn try_reconcile_plugin(
+        &self,
+        plugin_id: &PluginId,
+        now: DateTime<Utc>,
+        idle_timeout: Duration,
+    ) -> ReconcileOutcome {
+        let _operation_guard = match self.try_operation_lock(plugin_id) {
+            Ok(guard) => guard,
+            Err(InstallError::PluginOperationInProgress) => {
+                return ReconcileOutcome::SkippedBusy;
+            }
+            Err(_) => return ReconcileOutcome::Failed,
+        };
+        let mut record = match self.load_plugin(plugin_id).await {
+            Ok(record) => record,
+            Err(_) => return ReconcileOutcome::Failed,
+        };
+        if !record.enabled || record.status == PluginStatus::Installing {
+            return ReconcileOutcome::Noop;
+        }
+
+        match record.run_mode {
+            RunMode::Always => {
+                if record.status == PluginStatus::Healthy {
+                    self.reset_automatic_start_failures(plugin_id);
+                    return ReconcileOutcome::Noop;
+                }
+                if self.automatic_start_failure_count(plugin_id) >= 3 {
+                    return ReconcileOutcome::Noop;
+                }
+                match self.start_transition(&mut record).await {
+                    Ok(()) => {
+                        if self.state_store.save_plugin(&record).await.is_err() {
+                            return ReconcileOutcome::Failed;
+                        }
+                        self.reset_automatic_start_failures(plugin_id);
+                        ReconcileOutcome::Started
+                    }
+                    Err(_) => {
+                        let failures = self.increment_automatic_start_failures(plugin_id);
+                        record.last_error = Some("plugin runtime action failed".to_string());
+                        record.updated_at = Utc::now();
+                        if failures >= 3 {
+                            record.status = PluginStatus::Unhealthy;
+                        }
+                        let _ = self.state_store.save_plugin(&record).await;
+                        ReconcileOutcome::Failed
+                    }
+                }
+            }
+            RunMode::OnDemand => {
+                if record.status != PluginStatus::Healthy {
+                    return ReconcileOutcome::Noop;
+                }
+                let last_used_at = record.last_used_at.unwrap_or(record.updated_at);
+                let idle_seconds = now.signed_duration_since(last_used_at).num_seconds();
+                let timeout_seconds = i64::try_from(idle_timeout.as_secs()).unwrap_or(i64::MAX);
+                if idle_seconds < timeout_seconds {
+                    return ReconcileOutcome::Noop;
+                }
+                match self.stop_transition(&mut record).await {
+                    Ok(()) => {
+                        if self.state_store.save_plugin(&record).await.is_err() {
+                            return ReconcileOutcome::Failed;
+                        }
+                        ReconcileOutcome::Stopped
+                    }
+                    Err(_) => {
+                        self.record_management_failure(&record).await;
+                        ReconcileOutcome::Failed
+                    }
+                }
+            }
+        }
+    }
+
     async fn start_transition(
         &self,
         record: &mut InstallPluginRecord,
@@ -708,6 +818,29 @@ impl PluginManagerService {
         failed.last_error = Some("plugin runtime action failed".to_string());
         failed.updated_at = Utc::now();
         let _ = self.state_store.save_plugin(&failed).await;
+    }
+
+    fn automatic_start_failure_count(&self, plugin_id: &PluginId) -> u8 {
+        self.automatic_start_failures
+            .lock()
+            .ok()
+            .and_then(|failures| failures.get(plugin_id).copied())
+            .unwrap_or(0)
+    }
+
+    fn increment_automatic_start_failures(&self, plugin_id: &PluginId) -> u8 {
+        let Ok(mut failures) = self.automatic_start_failures.lock() else {
+            return 3;
+        };
+        let count = failures.entry(plugin_id.clone()).or_insert(0);
+        *count = count.saturating_add(1);
+        *count
+    }
+
+    fn reset_automatic_start_failures(&self, plugin_id: &PluginId) {
+        if let Ok(mut failures) = self.automatic_start_failures.lock() {
+            failures.remove(plugin_id);
+        }
     }
 
     async fn reconcile_operation(
@@ -1112,6 +1245,24 @@ pub struct UpdatePluginSettingsCommand {
     pub enabled: bool,
     pub run_mode: RunMode,
     pub priority: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LifecycleReconcileReport {
+    pub scanned: usize,
+    pub started: usize,
+    pub stopped: usize,
+    pub skipped_busy: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconcileOutcome {
+    Started,
+    Stopped,
+    SkippedBusy,
+    Failed,
+    Noop,
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
