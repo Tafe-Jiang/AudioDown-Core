@@ -48,6 +48,9 @@ This plan deliberately stops after plugin management. It does not invoke content
 - Start every Task with `git status --short --branch`; do not include unrelated work.
 - Execute Tasks in order without merging or skipping them.
 - For every Task: write the failing test, run it and observe the intended failure, implement only that Task, run the stated verification, then commit.
+- Approved revision: Task 15 is expanded into the ten committed tasks in
+  `2026-07-11-audiodown-mcp-ui-redesign-implementation-plan.md`; those commits
+  replace the former single Task 15 commit.
 - Use the suggested commit subject and add one concise Chinese commit body describing the change.
 - Diagnose failing tests; never bypass, weaken, or delete them.
 - Prefer `rust:1.88-bookworm` and `node:22-bookworm-slim` verification containers when local toolchains are unavailable.
@@ -1991,105 +1994,53 @@ git commit -m "feat: reconcile plugin runtime modes" \
   -m "协调常驻插件启动和按需插件空闲停止。"
 ```
 
-### Task 15: Build the Repository Installation UI
+### Task 15: Execute the MCP-Driven Complete UI Redesign
 
-**Files:**
-- Modify: `web/package.json`
-- Modify: `web/package-lock.json`
-- Modify: `web/src/api/client.ts`
-- Modify: `web/src/views/PluginsView.vue`
-- Create: `web/src/views/PluginsView.test.ts`
-- Modify: `web/src/styles.css`
+**Plan:**
+- Execute:
+  `docs/superpowers/plans/2026-07-11-audiodown-mcp-ui-redesign-implementation-plan.md`
 
-- [ ] **Step 1: Write failing UI tests**
+This approved plan revision expands Task 15 into ten ordered, independently
+tested and committed UI tasks. Do not execute the superseded single-page UI
+implementation. Do not create an extra umbrella commit after the ten UI
+commits.
 
-Test these workflows with mocked Core responses:
-
-```text
-empty plugin page exposes an Add repository command
-repository URL form rejects an empty value before fetch
-inspect renders repository name, locked short SHA, plugin name/type/version, and install action
-script-risk plugin displays the declared reason and requires an explicit checkbox
-developer mode risk approval requires a password-style developer token field
-developer token is sent only as x-audiodown-dev-token and cleared after submit/close
-developer token is never written to localStorage or sessionStorage
-system response retains existing Supervisor status while adding developmentMode
-install refreshes the installed list
-installed row can enable/disable, choose on-demand/always, edit priority, start, stop, and uninstall
-uninstall requires a modal confirmation naming the plugin
-Supervisor unavailable disables install and runtime-changing controls
-API errors remain visible and do not clear the current preview
-no real content platform label or repository URL is hardcoded
-```
-
-- [ ] **Step 2: Run the UI test and verify it fails**
+- [ ] **Step 1: Verify phase-two backend prerequisites**
 
 Run:
 
 ```bash
-docker run --rm -v "$(pwd)/web:/app" -w /app node:22-bookworm-slim \
-  sh -lc 'npm ci && npm test -- --run PluginsView.test.ts'
+git status --short --branch
+docker run --rm -v "$(pwd):/workspace" -w /workspace rust:1.88-bookworm \
+  sh -lc 'cargo test -p audiodown-plugin-manager --test lifecycle_service && cargo test -p audiodown-server --test lifecycle_reconciler'
 ```
 
-Expected: FAIL because repository controls and API methods are missing.
+Expected: clean worktree and PASS through phase-two Task 14.
 
-- [ ] **Step 3: Implement the operational plugin page**
+- [ ] **Step 2: Execute UI redesign Tasks 1-10**
 
-Add typed client methods:
+Follow the referenced plan exactly with MCP lookup, red-green TDD, verification,
+and one commit per task.
 
-```ts
-getSystem(): Promise<SystemResponse>
-inspectRepository(url: string): Promise<RepositoryPreview>
-installPlugin(
-  snapshotId: string,
-  pluginId: string,
-  allowLifecycleScripts: boolean,
-  developerToken?: string,
-): Promise<PluginItem>
-updatePlugin(pluginId: string, settings: PluginSettings): Promise<PluginItem>
-startPlugin(pluginId: string): Promise<PluginRuntimeState>
-stopPlugin(pluginId: string): Promise<PluginRuntimeState>
-uninstallPlugin(pluginId: string): Promise<void>
-```
-
-Extend the existing `SystemResponse` with `developmentMode`; preserve its
-current version, Supervisor availability/status, and plugin-count fields so
-the page can disable runtime-changing controls when Supervisor is unavailable.
-
-Add `lucide-vue-next` and use `Plus`, `Search`, `Play`, `Square`, `Save`, and
-`Trash2` for commands with `aria-label` and `title` text. Use a compact page
-layout: repository URL input with an inspect command, unframed preview section,
-installed plugin table, native checkbox/select/number controls, and a single
-confirmation modal for uninstall. Do not add marketing copy, platform imagery,
-platform credentials, search results, downloads, themes, or plugin-supplied
-HTML.
-
-When `developmentMode` is true and the selected plugin declares lifecycle
-scripts, show the explicit risk checkbox and a password-style developer token
-input in the risk modal. Keep the token only in a Vue `ref`, pass it as
-`x-audiodown-dev-token`, and clear the ref on success, error, cancel, and
-component unmount. Never mirror the token into a URL, request body, rendered
-summary, storage API, or persisted state. Outside developer mode, explain the
-stable `DEVELOPER_MODE_REQUIRED` response without showing a token input.
-
-- [ ] **Step 4: Run Vue tests, typecheck, and build**
+- [ ] **Step 3: Verify the complete UI**
 
 Run:
 
 ```bash
 docker run --rm -v "$(pwd)/web:/app" -w /app node:22-bookworm-slim \
   sh -lc 'npm ci && npm test -- --run && npm run typecheck && npm run build'
+
+docker run --rm --ipc=host -v "$(pwd)/web:/app" -w /app \
+  mcr.microsoft.com/playwright:v1.61.1-noble \
+  sh -lc 'npm ci && npx playwright test'
 ```
 
-Expected: PASS.
+Expected: all unit, accessibility, responsive, and visual checks PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Continue to Task 16**
 
-```bash
-git add web
-git commit -m "feat: add plugin repository management UI" \
-  -m "新增仓库检查、风险确认和插件管理界面。"
-```
+Confirm the latest ten commits correspond to the UI plan and continue directly
+to Task 16 without an additional Task 15 commit.
 
 ### Task 16: Complete Repository Installation Integration and Acceptance
 
@@ -2107,6 +2058,7 @@ git commit -m "feat: add plugin repository management UI" \
 - Create: `tests/plugin-phase2-verification-wiring.sh`
 - Create: `tests/plugin-repository-smoke.sh`
 - Create: `tests/plugin-installation-security.sh`
+- Create: `web/tests/plugin-installation-live.spec.ts`
 - Modify: `scripts/verify.sh`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `README.md`
@@ -2116,8 +2068,10 @@ git commit -m "feat: add plugin repository management UI" \
 
 Create `tests/plugin-phase2-verification-wiring.sh`. It must parse
 `scripts/verify.sh` and `.github/workflows/ci.yml` and assert that both phase
-two integration scripts are invoked in the required order, failure logs are
-collected, and no image-publish step exists.
+two integration scripts, Vue unit/type/build checks, mocked MCP UI Playwright
+checks, and the live `plugin-installation-live.spec.ts` browser check are
+invoked in the required order. It also asserts failure logs/screenshots are
+collected and no image-publish step exists.
 
 Run:
 
@@ -2169,8 +2123,44 @@ The smoke test must:
 10. Change priority and switch always -> on_demand.
 11. Stop and uninstall the plugin.
 12. Verify the container, managed image, installed directory, and SQLite row are gone.
-13. Verify Core and Supervisor remain healthy and the UI returns to empty state.
+13. Launch Playwright against the real Core URL without API route mocks.
+14. Open Plugins and submit the canonical repository URL through the UI.
+15. Verify the UI renders repository ID, locked commit, and virtual plugins.
+16. Install the build-risk plugin through the UI using the explicit checkbox
+    and password developer-token field.
+17. Verify the real Core accepts the UI JSON body and
+    x-audiodown-dev-token header by completing the granted build.
+18. Enable, change mode/priority, start, stop, and uninstall through UI controls.
+19. Verify API/SQLite/runtime cleanup and the UI installed list returns empty.
+20. Verify Core and Supervisor remain healthy.
 ```
+
+`web/tests/plugin-installation-live.spec.ts` must not call `page.route`,
+`route.fulfill`, or any mock helper. It receives the real base URL and fixture
+token through test-only environment variables. The token is entered into the
+UI field and is never printed in Playwright output, traces, screenshots, or
+failure attachments.
+
+The smoke script runs it on the Compose network:
+
+```bash
+docker run --rm --ipc=host \
+  --network "${compose_project}_default" \
+  -e AUDIODOWN_LIVE_BASE_URL="http://audiodown:18080" \
+  -e AUDIODOWN_LIVE_DEV_TOKEN="$fixture_dev_token" \
+  -v "$(pwd)/web:/app" -w /app \
+  mcr.microsoft.com/playwright:v1.61.1-noble \
+  sh -lc 'npm ci && npx playwright test tests/plugin-installation-live.spec.ts'
+```
+
+The test configuration reads `AUDIODOWN_LIVE_BASE_URL` without serializing
+`AUDIODOWN_LIVE_DEV_TOKEN` into config or reporters. The live spec sets:
+
+```ts
+test.use({ trace: "off", screenshot: "off", video: "off" });
+```
+
+so the password field value cannot enter Playwright artifacts.
 
 Run it after the fixture self-check passes:
 
@@ -2230,8 +2220,10 @@ Append in order:
 Plugin manager unit tests
 Repository API tests
 Supervisor build policy tests
-Vue plugin management tests
+Vue unit, typecheck, and build tests
+MCP UI Playwright accessibility, responsive, and visual tests
 Repository installation smoke
+Live UI-to-Core repository install/manage/uninstall smoke
 Plugin installation security
 ```
 
@@ -2243,6 +2235,7 @@ mock GitHub logs
 build proxy logs
 plugin build logs
 runtime plugin logs
+Playwright report and failed UI screenshots
 redacted test diagnostics
 ```
 
@@ -2285,7 +2278,7 @@ Expected: all checks PASS.
 - [ ] **Step 8: Commit the verified integration changes**
 
 ```bash
-git add test-fixtures tests scripts .github README.md
+git add test-fixtures tests scripts web .github README.md
 git commit -m "test: verify secure plugin installation" \
   -m "验证 GitHub 仓库快照安装、受限 Node 构建、插件管理和安全边界。"
 ```
@@ -2313,6 +2306,7 @@ Docker/Compose/Rust/Node versions
 full verification result
 repository inspect and locked commit evidence
 install/start/settings/stop/uninstall lifecycle
+live browser-to-Core repository install and developer-token header flow
 managed image and install directory cleanup
 build proxy and runtime security assertions
 known phase-two exclusions
