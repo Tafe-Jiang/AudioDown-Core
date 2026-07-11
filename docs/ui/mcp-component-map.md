@@ -11,3 +11,14 @@
 | Loading | skeleton-demo | shadcn-vue Skeleton |
 
 React/TSX source is not copied. All runtime components are Vue/Reka UI.
+
+## Shared Component Adaptations
+
+- `AsyncState` combines `skeleton-demo` and `alert` while leaving data fetching
+  to each view.
+- `EmptyState` keeps the `empty-demo` hierarchy and limits commands to one
+  primary and one optional secondary action.
+- `ResponsiveDialog` selects the Vue/Reka Dialog above 760px and the
+  `vaul-vue` Drawer at or below 760px, with one shared content contract.
+- `vue-sonner` is mounted once beside the root application component; inline
+  errors remain owned by the affected view.
