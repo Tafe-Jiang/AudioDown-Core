@@ -1,5 +1,12 @@
+import {
+  ContentContractError,
+  PluginContentError,
+  isContentMethod,
+} from "./content.js";
+
 const PROTOCOL_VERSION = "1.0";
 const MAX_MESSAGE_BYTES = 1024 * 1024;
+const APPLICATION_ERROR = -32000;
 
 export class RpcError extends Error {
   constructor(code, message, data = undefined) {
@@ -16,6 +23,7 @@ export async function createPluginServer({
   input,
   output,
 }) {
+  validateHandlerMap(handlers);
   const startedAt = Date.now();
   let buffer = "";
   let shuttingDown = false;
@@ -72,10 +80,7 @@ export async function createPluginServer({
         result: result ?? null,
       });
     } catch (error) {
-      const rpcError =
-        error instanceof RpcError
-          ? error
-          : new RpcError(-32603, "Internal error");
+      const rpcError = safeRpcError(error);
       await writeJson(
         output,
         errorResponse(id, rpcError.code, rpcError.message, rpcError.data),
@@ -111,6 +116,46 @@ export async function createPluginServer({
     }
     await processLine(buffer);
   }
+}
+
+function validateHandlerMap(handlers) {
+  if (
+    handlers === null ||
+    typeof handlers !== "object" ||
+    Array.isArray(handlers) ||
+    Object.keys(handlers).some(
+      (method) => !isContentMethod(method) || typeof handlers[method] !== "function",
+    )
+  ) {
+    throw new Error("handler method is not allowed");
+  }
+}
+
+function safeRpcError(error) {
+  if (error instanceof RpcError) {
+    return error;
+  }
+  if (error instanceof PluginContentError) {
+    return new RpcError(APPLICATION_ERROR, error.summary, {
+      code: error.code,
+      summary: error.summary,
+      ...(error.retryAfterSeconds === undefined
+        ? {}
+        : { retryAfterSeconds: error.retryAfterSeconds }),
+    });
+  }
+  if (error instanceof ContentContractError) {
+    const requestError = error.code === "INVALID_REQUEST";
+    const code = requestError ? "INVALID_REQUEST" : "PLUGIN_RESPONSE_INVALID";
+    const summary = requestError
+      ? "Plugin request was invalid"
+      : "Plugin response was invalid";
+    return new RpcError(APPLICATION_ERROR, summary, { code, summary });
+  }
+  return new RpcError(APPLICATION_ERROR, "Plugin call failed", {
+    code: "PLUGIN_INTERNAL_ERROR",
+    summary: "Plugin call failed",
+  });
 }
 
 function errorResponse(id, code, message, data = undefined) {
