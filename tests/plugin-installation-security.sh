@@ -73,6 +73,17 @@ wait_for_core() {
   done
 }
 
+snapshot_database() {
+  snapshot_dir="$1"
+  rm -rf "$snapshot_dir"
+  mkdir -p "$snapshot_dir"
+  docker cp "$core_container:/data/." - |
+    tar -xf - -C "$snapshot_dir" ||
+    fail "could not snapshot the stopped Core database for host assertions"
+  [ -f "$snapshot_dir/audiodown.db" ] ||
+    fail "Core database snapshot is missing"
+}
+
 cleanup() {
   status=$?
   if [ -n "$install_pid" ]; then
@@ -336,7 +347,7 @@ then
   fail "unapproved lifecycle-script installation returned the wrong error code"
 fi
 
-if find "$AUDIODOWN_HOST_DATA_DIR" -name build-risk-marker.txt -print |
+if find "$AUDIODOWN_HOST_DATA_DIR" -name build-risk-marker.txt -print 2>/dev/null |
   grep -q .; then
   fail "lifecycle script marker was created without approval"
 fi
@@ -359,6 +370,9 @@ database="$AUDIODOWN_HOST_DATA_DIR/audiodown.db"
 [ -f "$database" ] ||
   fail "SQLite database was not created before side-effect assertions"
 compose stop audiodown >/dev/null
+database_snapshot="$temporary_dir/database-snapshot"
+snapshot_database "$database_snapshot"
+database="$database_snapshot/audiodown.db"
 denied_plugin_count="$(
   sqlite3 -noheader "$database" \
     "SELECT COUNT(*) FROM plugins WHERE plugin_id = '$risk_plugin_id';"
@@ -704,6 +718,8 @@ fi
 [ ! -e "$AUDIODOWN_HOST_DATA_DIR/plugins/installed/$risk_plugin_id" ] ||
   fail "security test uninstall left the managed install directory"
 compose stop audiodown >/dev/null
+snapshot_database "$database_snapshot"
+database="$database_snapshot/audiodown.db"
 remaining_plugin_count="$(
   sqlite3 -noheader "$database" \
     "SELECT COUNT(*) FROM plugins WHERE plugin_id = '$risk_plugin_id';"
