@@ -10,12 +10,47 @@ export function createLogger({ output }) {
           method: "log.emit",
           params: {
             level,
-            message: String(message),
-            context,
+            message: redactProxyToken(String(message)),
+            context: redactProxyToken(context),
           },
         })}\n`,
       );
     };
   }
   return logger;
+}
+
+function redactProxyToken(value, seen = new WeakSet()) {
+  const token = process.env.AUDIODOWN_PROXY_TOKEN;
+  if (typeof token !== "string" || token.length === 0) {
+    return value;
+  }
+  const candidates = [
+    token,
+    Buffer.from(token, "utf8").toString("base64"),
+  ];
+
+  if (typeof value === "string") {
+    return candidates.reduce(
+      (redacted, candidate) =>
+        redacted.split(candidate).join("[REDACTED]"),
+      value,
+    );
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return "[REDACTED]";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => redactProxyToken(item, seen));
+  }
+
+  const redacted = {};
+  for (const [key, item] of Object.entries(value)) {
+    redacted[redactProxyToken(key, seen)] = redactProxyToken(item, seen);
+  }
+  return redacted;
 }

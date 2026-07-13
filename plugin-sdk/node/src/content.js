@@ -58,6 +58,7 @@ export class PluginContentError extends Error {
     this.code = code;
     this.summary = summary;
     this.retryAfterSeconds = retryAfterSeconds;
+    Object.freeze(this);
   }
 }
 

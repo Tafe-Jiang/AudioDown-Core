@@ -132,3 +132,32 @@ test("emits structured logs as JSON-RPC notifications", () => {
   assert.equal(notification.params.message, "virtual plugin ready");
   assert.deepEqual(notification.params.context, { healthy: true });
 });
+
+test("redacts the proxy token and its reversible encoding from SDK logs", () => {
+  const proxyToken = "logger-proxy-token-canary-0123456789";
+  const encodedToken = Buffer.from(proxyToken).toString("base64");
+  const previousToken = process.env.AUDIODOWN_PROXY_TOKEN;
+  process.env.AUDIODOWN_PROXY_TOKEN = proxyToken;
+  try {
+    const output = captureOutput();
+    const logger = createLogger({ output: output.stream });
+
+    logger.warn(`token=${proxyToken}`, {
+      nested: {
+        token: proxyToken,
+        encodedToken,
+      },
+    });
+
+    const serialized = JSON.stringify(output.lines()[0]);
+    assert.equal(serialized.includes(proxyToken), false);
+    assert.equal(serialized.includes(encodedToken), false);
+    assert.equal(serialized.includes("[REDACTED]"), true);
+  } finally {
+    if (previousToken === undefined) {
+      delete process.env.AUDIODOWN_PROXY_TOKEN;
+    } else {
+      process.env.AUDIODOWN_PROXY_TOKEN = previousToken;
+    }
+  }
+});

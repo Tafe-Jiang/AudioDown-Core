@@ -3,6 +3,11 @@ import {
   PluginContentError,
   isContentMethod,
 } from "./content.js";
+import {
+  CredentialContractError,
+  PluginCredentialError,
+  isCredentialMethod,
+} from "./credential.js";
 
 const PROTOCOL_VERSION = "1.0";
 const MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -66,7 +71,11 @@ export async function createPluginServer({
       return;
     }
 
-    const handler = builtInHandlers[request.method] ?? handlers[request.method];
+    const handler = Object.hasOwn(builtInHandlers, request.method)
+      ? builtInHandlers[request.method]
+      : Object.hasOwn(handlers, request.method)
+        ? handlers[request.method]
+        : undefined;
     if (typeof handler !== "function") {
       await writeJson(output, errorResponse(id, -32601, "Method not found"));
       return;
@@ -74,6 +83,12 @@ export async function createPluginServer({
 
     try {
       const result = await handler(request.params ?? {});
+      if (containsProxyToken(result)) {
+        throw new CredentialContractError(
+          "PLUGIN_RESPONSE_INVALID",
+          "plugin result contains the proxy token",
+        );
+      }
       await writeJson(output, {
         jsonrpc: "2.0",
         id,
@@ -123,19 +138,27 @@ function validateHandlerMap(handlers) {
     handlers === null ||
     typeof handlers !== "object" ||
     Array.isArray(handlers) ||
-    Object.keys(handlers).some(
-      (method) => !isContentMethod(method) || typeof handlers[method] !== "function",
-    )
+    ![Object.prototype, null].includes(Object.getPrototypeOf(handlers)) ||
+    Reflect.ownKeys(handlers).some((method) => {
+      if (
+        typeof method !== "string" ||
+        (!isContentMethod(method) && !isCredentialMethod(method))
+      ) {
+        return true;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(handlers, method);
+      return descriptor === undefined || typeof descriptor.value !== "function";
+    })
   ) {
     throw new Error("handler method is not allowed");
   }
 }
 
 function safeRpcError(error) {
-  if (error instanceof RpcError) {
-    return error;
-  }
   if (error instanceof PluginContentError) {
+    if (containsProxyToken(error.summary)) {
+      return internalError();
+    }
     return new RpcError(APPLICATION_ERROR, error.summary, {
       code: error.code,
       summary: error.summary,
@@ -144,7 +167,22 @@ function safeRpcError(error) {
         : { retryAfterSeconds: error.retryAfterSeconds }),
     });
   }
-  if (error instanceof ContentContractError) {
+  if (error instanceof PluginCredentialError) {
+    if (containsProxyToken(error.summary)) {
+      return internalError();
+    }
+    return new RpcError(APPLICATION_ERROR, error.summary, {
+      code: error.code,
+      summary: error.summary,
+      ...(error.retryAfterSeconds === undefined
+        ? {}
+        : { retryAfterSeconds: error.retryAfterSeconds }),
+    });
+  }
+  if (
+    error instanceof ContentContractError ||
+    error instanceof CredentialContractError
+  ) {
     const requestError = error.code === "INVALID_REQUEST";
     const code = requestError ? "INVALID_REQUEST" : "PLUGIN_RESPONSE_INVALID";
     const summary = requestError
@@ -152,6 +190,33 @@ function safeRpcError(error) {
       : "Plugin response was invalid";
     return new RpcError(APPLICATION_ERROR, summary, { code, summary });
   }
+  return internalError();
+}
+
+function containsProxyToken(value) {
+  const token = process.env.AUDIODOWN_PROXY_TOKEN;
+  if (typeof token !== "string" || token.length === 0) {
+    return false;
+  }
+  const candidates = [
+    token,
+    Buffer.from(token, "utf8").toString("base64"),
+  ];
+  if (typeof value === "string") {
+    return candidates.some((candidate) => value.includes(candidate));
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsProxyToken);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).some(
+      ([key, item]) => containsProxyToken(key) || containsProxyToken(item),
+    );
+  }
+  return false;
+}
+
+function internalError() {
   return new RpcError(APPLICATION_ERROR, "Plugin call failed", {
     code: "PLUGIN_INTERNAL_ERROR",
     summary: "Plugin call failed",
