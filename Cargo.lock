@@ -240,12 +240,16 @@ name = "audiodown-storage"
 version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
+ "audiodown-credential-vault",
  "audiodown-domain",
  "audiodown-plugin-api",
  "chrono",
+ "secrecy",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
+ "tempfile",
  "thiserror",
  "tokio",
  "uuid",

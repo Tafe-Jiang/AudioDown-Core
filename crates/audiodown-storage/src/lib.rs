@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod content_routing_repository;
+mod credential_repository;
 mod log_repository;
 mod plugin_repository;
 mod risk_grant_repository;
@@ -55,6 +56,10 @@ impl Storage {
         ContentRoutingRepository::new(&self.pool)
     }
 
+    pub fn credentials(&self) -> CredentialRepository<'_> {
+        CredentialRepository::new(&self.pool)
+    }
+
     pub fn logs(&self) -> LogRepository<'_> {
         LogRepository::new(&self.pool)
     }
@@ -74,8 +79,13 @@ pub enum StorageError {
     InvalidData(String),
     #[error("record not found")]
     NotFound,
+    #[error("record conflicts with existing state")]
+    Conflict,
 }
 pub use content_routing_repository::{
     ContentParticipation, ContentParticipationKind, ContentRoutingCandidate,
     ContentRoutingRepository,
+};
+pub use credential_repository::{
+    CredentialRecord, CredentialRepository, CredentialScopeGrantRecord,
 };
