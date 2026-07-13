@@ -191,6 +191,7 @@ pub struct PluginManagerService {
     plugin_api_version: Version,
     inspection_permits: Semaphore,
     operation_locks: StdMutex<HashMap<PluginId, Weak<AsyncMutex<()>>>>,
+    content_startup_locks: StdMutex<HashMap<PluginId, Weak<AsyncMutex<()>>>>,
     active_calls: Arc<StdMutex<HashMap<PluginId, usize>>>,
     automatic_start_failures: StdMutex<HashMap<PluginId, u8>>,
     install_poll_interval: Duration,
@@ -215,6 +216,7 @@ impl PluginManagerService {
             plugin_api_version,
             inspection_permits: Semaphore::new(MAX_CONCURRENT_INSPECTIONS),
             operation_locks: StdMutex::new(HashMap::new()),
+            content_startup_locks: StdMutex::new(HashMap::new()),
             active_calls: Arc::new(StdMutex::new(HashMap::new())),
             automatic_start_failures: StdMutex::new(HashMap::new()),
             install_poll_interval: DEFAULT_INSTALL_POLL_INTERVAL,
@@ -570,6 +572,10 @@ impl PluginManagerService {
         {
             return Err(ContentInvocationError::InvalidRequest);
         }
+        let startup_guard = self
+            .content_startup_lock(&request.plugin_id)
+            .await
+            .map_err(|_| ContentInvocationError::Internal)?;
         let operation_guard = self
             .try_operation_lock(&request.plugin_id)
             .map_err(|_| ContentInvocationError::PluginBusy)?;
@@ -596,6 +602,7 @@ impl PluginManagerService {
                 .map_err(|_| ContentInvocationError::Internal)?;
         }
         drop(operation_guard);
+        drop(startup_guard);
 
         let started_at = Instant::now();
         self.persist_content_call_log(&record, &request, ContentCallEvent::Started, 0, None)
@@ -1352,6 +1359,27 @@ impl PluginManagerService {
         };
         lock.try_lock_owned()
             .map_err(|_| InstallError::PluginOperationInProgress)
+    }
+
+    async fn content_startup_lock(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<OwnedMutexGuard<()>, InstallError> {
+        let lock = {
+            let mut registry = self
+                .content_startup_locks
+                .lock()
+                .map_err(|_| InstallError::Internal)?;
+            registry.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(lock) = registry.get(plugin_id).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(AsyncMutex::new(()));
+                registry.insert(plugin_id.clone(), Arc::downgrade(&lock));
+                lock
+            }
+        };
+        Ok(lock.lock_owned().await)
     }
 }
 

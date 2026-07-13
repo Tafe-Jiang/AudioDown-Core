@@ -141,6 +141,72 @@ async fn healthy_plugin_calls_are_not_serialized() {
 }
 
 #[tokio::test]
+async fn concurrent_cold_calls_share_one_start_and_then_run_in_parallel() {
+    let fixture = Arc::new(Fixture::new());
+    fixture.seed_with_status(
+        "cold-parallel",
+        PluginType::Content,
+        true,
+        &["content.search"],
+        PluginStatus::Stopped,
+    );
+    fixture.runtime.block_start();
+    fixture.runtime.block_invocation();
+
+    let first = {
+        let fixture = fixture.clone();
+        tokio::spawn(async move {
+            fixture
+                .service
+                .invoke_content(request("cold-parallel", ContentMethod::Search))
+                .await
+        })
+    };
+    fixture.runtime.wait_for_starts(1).await;
+    let second = {
+        let fixture = fixture.clone();
+        tokio::spawn(async move {
+            fixture
+                .service
+                .invoke_content(request("cold-parallel", ContentMethod::Search))
+                .await
+        })
+    };
+
+    tokio::task::yield_now().await;
+    assert_eq!(fixture.runtime.start_count(), 1);
+    fixture.runtime.release_starts();
+    let both_calls_entered = tokio::time::timeout(
+        Duration::from_secs(1),
+        fixture.runtime.wait_for_invocations(2),
+    )
+    .await
+    .is_ok();
+    fixture.runtime.release_invocations();
+    let first = first.await.unwrap();
+    let second = second.await.unwrap();
+
+    assert!(
+        both_calls_entered,
+        "both cold calls should reach the runtime after one shared start"
+    );
+    assert_eq!(fixture.runtime.max_active_invocations(), 2);
+    first.unwrap();
+    second.unwrap();
+    assert_eq!(fixture.runtime.start_count(), 1);
+
+    let report = fixture
+        .service
+        .reconcile_due_plugins(
+            Utc::now() + ChronoDuration::hours(1),
+            Duration::from_secs(900),
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.stopped, 1);
+}
+
+#[tokio::test]
 async fn active_call_prevents_idle_stop_until_the_lease_is_released() {
     let fixture = Arc::new(Fixture::new());
     fixture.seed("leased", PluginType::Content, true, &["content.search"]);
@@ -409,9 +475,13 @@ impl PluginStateStore for FakeStore {
 struct FakeRuntime {
     events: Mutex<Vec<String>>,
     fail_invoke: AtomicBool,
+    block_start: AtomicBool,
     block_invoke: AtomicBool,
+    active_starts: AtomicUsize,
     active_invocations: AtomicUsize,
     max_active_invocations: AtomicUsize,
+    start_entered: Notify,
+    start_release: Notify,
     invocation_entered: Notify,
     invocation_release: Notify,
 }
@@ -425,8 +495,32 @@ impl FakeRuntime {
         self.fail_invoke.store(true, Ordering::SeqCst);
     }
 
+    fn block_start(&self) {
+        self.block_start.store(true, Ordering::SeqCst);
+    }
+
     fn block_invocation(&self) {
         self.block_invoke.store(true, Ordering::SeqCst);
+    }
+
+    async fn wait_for_starts(&self, count: usize) {
+        while self.active_starts.load(Ordering::SeqCst) < count {
+            self.start_entered.notified().await;
+        }
+    }
+
+    fn start_count(&self) -> usize {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event.starts_with("start:"))
+            .count()
+    }
+
+    fn release_starts(&self) {
+        self.block_start.store(false, Ordering::SeqCst);
+        self.start_release.notify_waiters();
     }
 
     async fn wait_for_invocations(&self, count: usize) {
@@ -461,6 +555,12 @@ impl PluginRuntimeControl for FakeRuntime {
             .lock()
             .unwrap()
             .push(format!("start:{plugin_id}"));
+        self.active_starts.fetch_add(1, Ordering::SeqCst);
+        self.start_entered.notify_waiters();
+        if self.block_start.load(Ordering::SeqCst) {
+            self.start_release.notified().await;
+        }
+        self.active_starts.fetch_sub(1, Ordering::SeqCst);
         Ok(Self::runtime_state(plugin_id, PluginStatus::Healthy))
     }
 
