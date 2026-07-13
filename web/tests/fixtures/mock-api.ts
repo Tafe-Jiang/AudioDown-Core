@@ -5,9 +5,27 @@ export const longPluginId =
 export const longCommitSha = "0123456789abcdef0123456789abcdef01234567";
 export const longLogMessage =
   "虚拟插件在握手阶段返回了一段很长的结构化错误摘要，用于验证移动端日志内容能够自然换行且不会覆盖时间、级别或后续内容。";
+export const discoverPluginId = "com.audiodown.virtual.content";
+export const discoverAlbumResourceId = "virtual-album-hero";
+export const discoverAlbumTitle = "Virtual Primary Album";
+export const discoverTrackCursor = "opaque-tracks-page-2";
 
 const repositoryUrl =
   "https://github.com/example-owner/example-audiodown-plugin-repository";
+const discoverPluginName = "Virtual Content";
+const discoverPluginVersion = "1.0.0";
+const discoverSource = {
+  platformId: "virtual",
+  pluginId: discoverPluginId,
+  pluginName: discoverPluginName,
+  pluginVersion: discoverPluginVersion,
+};
+const catalogSource = {
+  platformId: "catalog",
+  pluginId: "com.audiodown.catalog.content",
+  pluginName: "Virtual Catalog",
+  pluginVersion: "1.0.0",
+};
 
 export interface MockApiOptions {
   supervisorAvailable?: boolean;
@@ -17,6 +35,7 @@ export interface MockApiOptions {
   plugins?: "empty" | "installed";
   logs?: "empty" | "populated";
   search?: "empty" | "results" | "partial";
+  discover?: "empty" | "results" | "partial";
 }
 
 function fulfillJson(route: Route, value: unknown, status = 200) {
@@ -27,20 +46,125 @@ function fulfillJson(route: Route, value: unknown, status = 200) {
   });
 }
 
+function discoverItem(
+  resourceType: "album" | "track" | "category",
+  resourceId: string,
+  title: string,
+  subtitle?: string,
+) {
+  return {
+    resourceType,
+    resourceId,
+    canonicalId: `fixture:${resourceType}:${resourceId}`,
+    title,
+    subtitle,
+    description:
+      "Deterministic virtual content with verylongunbrokenmetadatavalueforresponsivechecks",
+  };
+}
+
+function discoverSections() {
+  return [
+    {
+      section: {
+        id: "hero",
+        title: "Featured",
+        layout: "hero-carousel",
+        items: [
+          discoverItem(
+            "album",
+            discoverAlbumResourceId,
+            "Virtual Hero Album",
+            "Virtual Primary Creator",
+          ),
+        ],
+      },
+      source: discoverSource,
+    },
+    {
+      section: {
+        id: "albums",
+        title: "Albums",
+        layout: "album-grid",
+        items: [
+          discoverItem(
+            "album",
+            "virtual-album-grid",
+            "Virtual Grid Album",
+            "Virtual Grid Creator",
+          ),
+        ],
+      },
+      source: discoverSource,
+    },
+    {
+      section: {
+        id: "recent",
+        title: "Recent",
+        layout: "horizontal-list",
+        items: [
+          discoverItem(
+            "album",
+            "virtual-album-recent",
+            "Virtual Recent Album",
+            "Virtual Recent Creator",
+          ),
+        ],
+      },
+      source: discoverSource,
+    },
+    {
+      section: {
+        id: "ranked",
+        title: "Ranked",
+        layout: "ranked-list",
+        items: [
+          discoverItem(
+            "track",
+            "virtual-track-ranked",
+            "Virtual Ranked Track",
+            "Virtual Ranked Creator",
+          ),
+        ],
+      },
+      source: discoverSource,
+    },
+    {
+      section: {
+        id: "categories",
+        title: "Categories",
+        layout: "category-grid",
+        items: [
+          discoverItem(
+            "category",
+            "virtual-category-discover",
+            "Virtual Discover Category",
+          ),
+        ],
+      },
+      source: discoverSource,
+    },
+  ];
+}
+
 export async function mockCoreApi(
   page: Page,
   options: MockApiOptions = {},
 ) {
   const supervisorAvailable = options.supervisorAvailable ?? true;
+  const useDiscoverPlugin =
+    options.discover === "results" || options.discover === "partial";
   let plugins =
     options.plugins === "empty"
       ? []
       : [
           {
-            pluginId: longPluginId,
+            pluginId: useDiscoverPlugin ? discoverPluginId : longPluginId,
             pluginType: "content",
-            platformId: "virtual-content",
-            name: "Virtual Content Plugin With A Long Responsive Name",
+            platformId: useDiscoverPlugin ? "virtual" : "virtual-content",
+            name: useDiscoverPlugin
+              ? discoverPluginName
+              : "Virtual Content Plugin With A Long Responsive Name",
             version: "1.0.0",
             status: "installed",
             enabled: true,
@@ -174,10 +298,222 @@ export async function mockCoreApi(
     }
 
     if (pathname === "/api/v1/discover") {
+      if (method !== "GET") {
+        return fulfillJson(
+          route,
+          { code: "INVALID_DISCOVER_REQUEST", message: "Invalid method" },
+          405,
+        );
+      }
+      if (
+        options.discover === "results" ||
+        options.discover === "partial"
+      ) {
+        const cursor = url.searchParams.get("cursor");
+        if (cursor && cursor !== "opaque-discover-page-2") {
+          return fulfillJson(
+            route,
+            { code: "INVALID_CURSOR", message: "Cursor is invalid" },
+            400,
+          );
+        }
+        if (cursor === "opaque-discover-page-2") {
+          return fulfillJson(route, {
+            items: [],
+            sections: [
+              {
+                section: {
+                  id: "more-albums",
+                  title: "More Albums",
+                  layout: "album-grid",
+                  items: [
+                    discoverItem(
+                      "album",
+                      "virtual-album-page-2",
+                      "Virtual Discover Album Page Two",
+                      "Virtual Page Two Creator",
+                    ),
+                  ],
+                },
+                source: discoverSource,
+              },
+            ],
+            nextCursor: null,
+            failures: [],
+            emptyState: null,
+          });
+        }
+        return fulfillJson(route, {
+          items: [],
+          sections: discoverSections(),
+          nextCursor: "opaque-discover-page-2",
+          failures:
+            options.discover === "partial"
+              ? [
+                  {
+                    code: "RESOURCE_ACCESS_DENIED",
+                    summary:
+                      "Virtual catalog discover source is unavailable",
+                    source: catalogSource,
+                  },
+                ]
+              : [],
+          emptyState: null,
+        });
+      }
       return fulfillJson(route, {
-        reason: "NO_CONTENT_PLUGINS",
-        title: "尚未安装内容插件",
-        actionLabel: "添加 GitHub 插件仓库",
+        items: [],
+        sections: [],
+        nextCursor: null,
+        failures: [],
+        emptyState: {
+          reason: "NO_CONTENT_PLUGINS",
+          title: "尚未安装内容插件",
+          actionLabel: "添加 GitHub 插件仓库",
+        },
+      });
+    }
+
+    if (pathname === "/api/v1/categories") {
+      if (method !== "GET") {
+        return fulfillJson(
+          route,
+          { code: "INVALID_CATEGORIES_REQUEST", message: "Invalid method" },
+          405,
+        );
+      }
+      if (
+        options.discover !== "results" &&
+        options.discover !== "partial"
+      ) {
+        return fulfillJson(route, {
+          items: [],
+          failures: [],
+          emptyState: {
+            reason: "NO_CONTENT_PLUGINS",
+            title: "尚未安装内容插件",
+            actionLabel: "添加 GitHub 插件仓库",
+          },
+        });
+      }
+      return fulfillJson(route, {
+        items: [
+          {
+            item: {
+              resourceId: "virtual-category-1",
+              canonicalId: "fixture:category:1",
+              title: "Virtual Category",
+              description: "Deterministic local category",
+            },
+            source: discoverSource,
+          },
+        ],
+        failures: [],
+        emptyState: null,
+      });
+    }
+
+    if (pathname === "/api/v1/albums/get") {
+      if (method !== "POST") {
+        return fulfillJson(
+          route,
+          { code: "INVALID_ALBUM_REQUEST", message: "Invalid method" },
+          405,
+        );
+      }
+      const body = request.postDataJSON() as {
+        pluginId?: string;
+        resourceId?: string;
+      };
+      if (
+        body.pluginId !== discoverPluginId ||
+        body.resourceId === "missing-album"
+      ) {
+        return fulfillJson(
+          route,
+          {
+            code: "RESOURCE_NOT_FOUND",
+            message: "Album resource was not found",
+          },
+          404,
+        );
+      }
+      if (body.resourceId !== discoverAlbumResourceId) {
+        return fulfillJson(
+          route,
+          {
+            code: "RESOURCE_NOT_FOUND",
+            message: "Album resource was not found",
+          },
+          404,
+        );
+      }
+      return fulfillJson(route, {
+        album: {
+          resourceId: discoverAlbumResourceId,
+          canonicalId: "fixture:album:shared",
+          title: discoverAlbumTitle,
+          creator: "Virtual Primary Creator",
+          description:
+            "Deterministic local album with verylongunbrokenmetadatavalueforresponsivechecks",
+          trackCount: 2,
+        },
+        source: discoverSource,
+      });
+    }
+
+    if (pathname === "/api/v1/tracks/list") {
+      if (method !== "POST") {
+        return fulfillJson(
+          route,
+          { code: "INVALID_TRACKS_REQUEST", message: "Invalid method" },
+          405,
+        );
+      }
+      const body = request.postDataJSON() as {
+        pluginId?: string;
+        albumResourceId?: string;
+        cursor?: string;
+      };
+      if (
+        body.pluginId !== discoverPluginId ||
+        body.albumResourceId !== discoverAlbumResourceId
+      ) {
+        return fulfillJson(
+          route,
+          {
+            code: "RESOURCE_NOT_FOUND",
+            message: "Album resource was not found",
+          },
+          404,
+        );
+      }
+      if (body.cursor && body.cursor !== discoverTrackCursor) {
+        return fulfillJson(
+          route,
+          { code: "INVALID_CURSOR", message: "Cursor is invalid" },
+          400,
+        );
+      }
+      const secondPage = body.cursor === discoverTrackCursor;
+      return fulfillJson(route, {
+        items: [
+          {
+            resourceId: secondPage
+              ? "virtual-track-2"
+              : "virtual-track-1",
+            canonicalId: secondPage
+              ? "fixture:track:2"
+              : "fixture:track:1",
+            title: secondPage
+              ? "Virtual Track 2"
+              : "Virtual Track 1",
+            sequence: secondPage ? 2 : 1,
+            durationSeconds: secondPage ? 125 : 60,
+          },
+        ],
+        source: discoverSource,
+        nextCursor: secondPage ? null : discoverTrackCursor,
       });
     }
 

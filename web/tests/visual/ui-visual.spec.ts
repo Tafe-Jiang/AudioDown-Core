@@ -1,6 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import {
+  discoverAlbumResourceId,
+  discoverAlbumTitle,
+  discoverPluginId,
   longCommitSha,
   longLogMessage,
   mockCoreApi,
@@ -32,6 +35,18 @@ async function expectVisual(page: Page, name: string) {
   await expect(page).toHaveScreenshot(name, { fullPage: true });
 }
 
+async function expectVisibleSourceVersion(page: Page) {
+  const pluginId = page
+    .locator("[data-plugin-id]:visible", {
+      hasText: discoverPluginId,
+    })
+    .first();
+  await expect(pluginId).toBeVisible();
+  await expect(pluginId.locator("..")).toContainText(
+    "Virtual Content 1.0.0",
+  );
+}
+
 async function openRepositoryPreview(
   page: Page,
   repositoryRisk: boolean,
@@ -48,6 +63,27 @@ async function openRepositoryPreview(
     .fill("https://github.com/example-owner/example-audiodown-plugin-repository");
   await page.getByRole("button", { name: "检查仓库" }).click();
   await expect(page.getByText(longCommitSha.slice(0, 7))).toBeVisible();
+}
+
+async function openAlbumDetail(page: Page) {
+  await mockCoreApi(page, { discover: "results" });
+  await page.goto("/discover");
+  await page
+    .locator(`[data-resource-id="${discoverAlbumResourceId}"]`)
+    .click();
+  await expect(page).toHaveURL(/\/albums\/detail/);
+
+  const url = new URL(page.url());
+  expect(url.searchParams.get("pluginId")).toBe(discoverPluginId);
+  expect(url.searchParams.get("resourceId")).toBe(
+    discoverAlbumResourceId,
+  );
+  await expect(
+    page.getByRole("heading", {
+      name: discoverAlbumTitle,
+      exact: true,
+    }),
+  ).toBeVisible();
 }
 
 test("desktop shell expanded", async ({ page }) => {
@@ -92,6 +128,75 @@ test("Discover empty", async ({ page }) => {
   await page.goto("/discover");
   await expect(page.getByText("尚未安装内容插件")).toBeVisible();
   await expectVisual(page, "discover-empty.png");
+});
+
+test("Discover five layouts desktop", async ({ page }) => {
+  await page.setViewportSize(desktop);
+  await mockCoreApi(page, { discover: "results" });
+  await page.goto("/discover");
+
+  await expect(page.locator("[data-discover-layout]")).toHaveCount(5);
+  for (const layout of [
+    "hero-carousel",
+    "album-grid",
+    "horizontal-list",
+    "ranked-list",
+    "category-grid",
+  ]) {
+    await expect(
+      page.locator(`[data-discover-layout="${layout}"]`),
+    ).toBeVisible();
+  }
+  await expect(page.getByText("Virtual Category")).toBeVisible();
+  await expectVisibleSourceVersion(page);
+  await expectVisual(page, "discover-five-layouts-desktop.png");
+});
+
+test("Discover five layouts mobile partial", async ({ page }) => {
+  await page.setViewportSize(mobile);
+  await mockCoreApi(page, { discover: "partial" });
+  await page.goto("/discover");
+
+  await expect(page.locator("[data-discover-layout]")).toHaveCount(5);
+  await expect(page.getByText("部分来源暂不可用")).toBeVisible();
+  await expect(page.getByText("RESOURCE_ACCESS_DENIED")).toBeVisible();
+  await expectVisibleSourceVersion(page);
+  await expectVisual(page, "discover-five-layouts-mobile-partial.png");
+});
+
+test("Album detail desktop", async ({ page }) => {
+  await page.setViewportSize(desktop);
+  await openAlbumDetail(page);
+
+  await expect(page.getByText("Virtual Primary Creator")).toBeVisible();
+  await expect(
+    page.getByText(/Deterministic local album with/),
+  ).toBeVisible();
+  await expectVisibleSourceVersion(page);
+  await expect(
+    page.locator('[data-track-id="virtual-track-1"]'),
+  ).toContainText("Virtual Track 1");
+  await expect(
+    page.getByRole("navigation", { name: "内容分页" }),
+  ).toBeVisible();
+  await expectVisual(page, "album-detail-desktop.png");
+});
+
+test("Album detail mobile second track page", async ({ page }) => {
+  await page.setViewportSize(mobile);
+  await openAlbumDetail(page);
+
+  const pagination = page.getByRole("navigation", {
+    name: "内容分页",
+  });
+  await pagination.getByRole("button", { name: "下一页" }).click();
+  await expect(
+    page.locator('[data-track-id="virtual-track-2"]'),
+  ).toContainText("Virtual Track 2");
+  await expect(
+    pagination.getByRole("button", { name: "上一页" }),
+  ).toBeEnabled();
+  await expectVisual(page, "album-detail-mobile-page-two.png");
 });
 
 test("Search empty with query", async ({ page }) => {

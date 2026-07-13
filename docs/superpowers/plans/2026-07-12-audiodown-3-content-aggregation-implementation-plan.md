@@ -23,7 +23,7 @@ This plan does not add credentials, Cookie handling, HTTP proxying, download pla
 
 ## Progress Snapshot
 
-As of 2026-07-12, Tasks 1 through 12 are complete and verified. Tasks 13 and 14 remain pending. The latest `main` push through Task 12 is an explicit intermediate checkpoint requested by the user; phase three is not complete until Task 14 and the clean-checkout verification pass.
+As of 2026-07-13, Tasks 1 through 13 are complete and verified. Task 14 remains pending. The latest `main` push through Task 12 was an explicit intermediate checkpoint requested by the user; phase three is not complete until Task 14 and the clean-checkout verification pass.
 
 ## Locked Decisions
 
@@ -642,11 +642,13 @@ git commit -m "阶段3：实现聚合搜索界面" \
 ### Task 13: Implement Discover, Album, and Track Views
 
 **Files:**
+- Modify: `web/src/api/client.ts`
 - Modify: `web/src/views/DiscoverView.vue`
 - Create: `web/src/views/AlbumView.vue`
 - Modify: `web/src/router.ts`
 - Create: `web/src/views/DiscoverView.test.ts`
 - Create: `web/src/views/AlbumView.test.ts`
+- Modify: `web/src/views/content-empty-states.test.ts`
 - Modify: `web/tests/fixtures/mock-api.ts`
 - Modify: `web/tests/accessibility.spec.ts`
 - Modify: `web/tests/visual/ui-visual.spec.ts`

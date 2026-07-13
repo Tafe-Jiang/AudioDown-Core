@@ -54,10 +54,28 @@ export interface SourcedDiscoverSection {
   source: ContentSource;
 }
 
+export interface CategoryItem {
+  resourceId: string;
+  canonicalId?: string;
+  title: string;
+  description?: string;
+}
+
+export interface SourcedCategoryItem {
+  item: CategoryItem;
+  source: ContentSource;
+}
+
 export interface ContentEnvelope {
   items: SourcedContentItem[];
   sections: SourcedDiscoverSection[];
   nextCursor: string | null;
+  failures: ContentFailure[];
+  emptyState: ContentEmptyState | null;
+}
+
+export interface CategoriesResponse {
+  items: SourcedCategoryItem[];
   failures: ContentFailure[];
   emptyState: ContentEmptyState | null;
 }
@@ -93,6 +111,7 @@ export interface TrackItem {
   resourceId: string;
   canonicalId?: string;
   title: string;
+  subtitle?: string;
   sequence?: number;
   durationSeconds?: number;
 }
@@ -352,7 +371,7 @@ export const api = {
   discover,
   search,
   categories: (options: Pick<ContentQueryOptions, "platformId" | "pluginId"> = {}) =>
-    requestJson<ContentEnvelope>(
+    requestJson<CategoriesResponse>(
       `/api/v1/categories${queryString(options)}`,
     ),
   album: (pluginId: string, resourceId: string) =>

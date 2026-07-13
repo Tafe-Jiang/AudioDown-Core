@@ -56,7 +56,10 @@ describe("content capability empty workflows", () => {
     expect(empty[0].classes()).toContain("border-0");
     expect(empty[0].find("svg").exists()).toBe(true);
     expect(wrapper.text()).toContain(emptyState.title);
-    await wrapper.get("button").trigger("click");
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes(emptyState.actionLabel))!
+      .trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.path).toBe("/plugins");
   });
