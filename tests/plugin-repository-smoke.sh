@@ -48,6 +48,17 @@ wait_for_core() {
   done
 }
 
+snapshot_database() {
+  snapshot_dir="$1"
+  rm -rf "$snapshot_dir"
+  mkdir -p "$snapshot_dir"
+  docker cp "$core_container:/data/." - |
+    tar -xf - -C "$snapshot_dir" ||
+    fail "could not snapshot the stopped Core database for host assertions"
+  [ -f "$snapshot_dir/audiodown.db" ] ||
+    fail "Core database snapshot is missing"
+}
+
 fail() {
   printf '%s\n' "PLUGIN_REPOSITORY_SMOKE: $*" >&2
   exit 1
@@ -199,6 +210,8 @@ tar -tzf "$temporary_dir/repository.tar.gz" |
   fail "fixture archive does not contain the repository index"
 
 compose up -d --build
+core_container="$(compose ps -q audiodown)"
+[ -n "$core_container" ] || fail "Core container was not created"
 
 docker run -d --rm \
   --name "$mock_name" \
@@ -339,6 +352,9 @@ done
 [ -f "$database" ] || fail "SQLite database was not created"
 
 compose stop audiodown >/dev/null
+database_snapshot="$temporary_dir/database-snapshot"
+snapshot_database "$database_snapshot"
+database="$database_snapshot/audiodown.db"
 record="$(
   sqlite3 -noheader "$database" "
     SELECT source_ref, commit_sha, image_id, status
@@ -438,6 +454,8 @@ docker run --rm --ipc=host \
   sh -lc 'npm ci && npx playwright test tests/plugin-installation-live.spec.ts'
 
 compose stop audiodown >/dev/null
+snapshot_database "$database_snapshot"
+database="$database_snapshot/audiodown.db"
 plugin_count="$(sqlite3 -noheader "$database" 'SELECT COUNT(*) FROM plugins;')"
 compose start audiodown >/dev/null
 wait_for_core
