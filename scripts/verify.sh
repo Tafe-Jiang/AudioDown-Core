@@ -6,6 +6,8 @@ cd "$root_dir"
 
 plugin_ids="
 com.audiodown.virtual.content
+com.audiodown.virtual.content-backup
+com.audiodown.catalog.content
 com.audiodown.virtual.build-risk
 "
 verify_id="audiodown-verify-$$"
@@ -119,4 +121,14 @@ printf '%s\n' "Running repository installation smoke including tests/plugin-inst
 printf '%s\n' "Running plugin installation security checks"
 ./tests/plugin-installation-security.sh
 
-printf '%s\n' "AudioDown phase-two verification passed"
+printf '%s\n' "Running virtual content contract checks"
+./tests/virtual-content-contract.sh
+
+printf '%s\n' \
+  "Running content aggregation smoke including web/tests/content-aggregation-live.spec.ts"
+./tests/content-aggregation-smoke.sh
+
+printf '%s\n' "Running content aggregation security checks"
+./tests/content-aggregation-security.sh
+
+printf '%s\n' "AudioDown phase-three verification passed"

@@ -74,7 +74,11 @@ jobs:
             sh -lc 'npm ci && npx playwright test' &&
           # The repository smoke runs tests/plugin-installation-live.spec.ts.
           ./tests/plugin-repository-smoke.sh &&
-          ./tests/plugin-installation-security.sh
+          ./tests/plugin-installation-security.sh &&
+          ./tests/virtual-content-contract.sh &&
+          # The content smoke runs web/tests/content-aggregation-live.spec.ts.
+          ./tests/content-aggregation-smoke.sh &&
+          ./tests/content-aggregation-security.sh
           status=$?
           if [ "$status" -ne 0 ]; then
             mkdir -p \
@@ -82,6 +86,7 @@ jobs:
               artifacts/mock-github \
               artifacts/plugin-build \
               artifacts/build-proxy \
+              artifacts/content \
               artifacts/runtime-plugin \
               artifacts/playwright \
               artifacts/diagnostics
@@ -123,6 +128,18 @@ jobs:
                 docker logs "$container" \
                   >"artifacts/runtime-plugin/$container.log" 2>&1 || true
               fi
+            done
+
+            # content API and runtime state
+            curl --silent http://127.0.0.1:18080/api/v1/system \
+              >artifacts/content/system.json 2>/dev/null || true
+            curl --silent http://127.0.0.1:18080/api/v1/plugins \
+              >artifacts/content/plugins.json 2>/dev/null || true
+            curl --silent 'http://127.0.0.1:18080/api/v1/logs?limit=200' \
+              >artifacts/content/logs.json 2>/dev/null || true
+            for container in $(docker ps -aq --filter "label=io.audiodown.managed=true"); do
+              docker inspect "$container" \
+                >"artifacts/content/$container-inspect.json" 2>/dev/null || true
             done
 
             # Playwright report and failed UI screenshots
