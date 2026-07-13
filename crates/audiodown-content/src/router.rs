@@ -751,6 +751,13 @@ const fn safe_failure_summary(code: PluginErrorCode) -> &'static str {
         PluginErrorCode::ResourceTemporarilyUnavailable => {
             "Content resource is temporarily unavailable"
         }
+        PluginErrorCode::CredentialNotFound
+        | PluginErrorCode::CredentialExpired
+        | PluginErrorCode::CredentialScopeNotAllowed
+        | PluginErrorCode::LoginFlowNotFound
+        | PluginErrorCode::LoginFlowExpired
+        | PluginErrorCode::LoginPending
+        | PluginErrorCode::LoginDenied => "Content plugin response was invalid",
         PluginErrorCode::RateLimited => "Content source is rate limited",
         PluginErrorCode::PlatformResponseChanged => "Content source response changed",
         PluginErrorCode::PluginInternalError => "Content plugin failed",

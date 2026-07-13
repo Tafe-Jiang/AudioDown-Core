@@ -6,6 +6,7 @@ use audiodown_plugin_api::{
         TracksListRequest, TracksListResult, MAX_CURSOR_BYTES, MAX_ITEMS_PER_RESPONSE,
         MAX_OPAQUE_ID_BYTES, MAX_QUERY_BYTES,
     },
+    credential::CredentialMethod,
     error::{PluginErrorCode, PluginErrorData},
 };
 use serde_json::json;
@@ -42,6 +43,7 @@ fn serializes_only_the_five_phase_three_methods() {
 
     assert!(serde_json::from_str::<ContentMethod>("\"content.download.plan\"").is_err());
     assert!(serde_json::from_str::<ContentMethod>("\"credential.status\"").is_err());
+    assert!(serde_json::from_str::<CredentialMethod>("\"content.search\"").is_err());
 }
 
 #[test]

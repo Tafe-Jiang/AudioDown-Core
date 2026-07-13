@@ -3,6 +3,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::content::ContentMethod;
+use crate::credential::CredentialMethod;
 
 pub const SYSTEM_HEALTH_CAPABILITY: &str = "system.health";
 
@@ -35,6 +36,8 @@ pub fn capability_is_supported(plugin_type: PluginType, capability: &str) -> boo
     capability == SYSTEM_HEALTH_CAPABILITY
         || (plugin_type == PluginType::Content
             && ContentMethod::from_capability(capability).is_some())
+        || (plugin_type == PluginType::Credential
+            && CredentialMethod::from_capability(capability).is_some())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

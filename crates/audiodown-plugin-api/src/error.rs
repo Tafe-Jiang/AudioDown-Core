@@ -18,6 +18,13 @@ pub enum PluginErrorCode {
     ResourceNotFound,
     ResourceAccessDenied,
     ResourceTemporarilyUnavailable,
+    CredentialNotFound,
+    CredentialExpired,
+    CredentialScopeNotAllowed,
+    LoginFlowNotFound,
+    LoginFlowExpired,
+    LoginPending,
+    LoginDenied,
     RateLimited,
     PlatformResponseChanged,
     PluginInternalError,
@@ -30,6 +37,7 @@ impl PluginErrorCode {
             Self::PluginUnavailable
                 | Self::PluginTimeout
                 | Self::ResourceTemporarilyUnavailable
+                | Self::LoginPending
                 | Self::RateLimited
         )
     }

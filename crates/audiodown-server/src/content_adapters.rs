@@ -585,6 +585,13 @@ const fn safe_plugin_summary(code: PluginErrorCode) -> &'static str {
         PluginErrorCode::ResourceTemporarilyUnavailable => {
             "Content resource is temporarily unavailable"
         }
+        PluginErrorCode::CredentialNotFound
+        | PluginErrorCode::CredentialExpired
+        | PluginErrorCode::CredentialScopeNotAllowed
+        | PluginErrorCode::LoginFlowNotFound
+        | PluginErrorCode::LoginFlowExpired
+        | PluginErrorCode::LoginPending
+        | PluginErrorCode::LoginDenied => "Content plugin response was invalid",
         PluginErrorCode::RateLimited => "Content source is rate limited",
         PluginErrorCode::PlatformResponseChanged => "Content source response changed",
         PluginErrorCode::PluginInternalError => "Content plugin failed",
@@ -603,6 +610,13 @@ pub const fn error_code_name(code: PluginErrorCode) -> &'static str {
         PluginErrorCode::ResourceNotFound => "RESOURCE_NOT_FOUND",
         PluginErrorCode::ResourceAccessDenied => "RESOURCE_ACCESS_DENIED",
         PluginErrorCode::ResourceTemporarilyUnavailable => "RESOURCE_TEMPORARILY_UNAVAILABLE",
+        PluginErrorCode::CredentialNotFound => "CREDENTIAL_NOT_FOUND",
+        PluginErrorCode::CredentialExpired => "CREDENTIAL_EXPIRED",
+        PluginErrorCode::CredentialScopeNotAllowed => "CREDENTIAL_SCOPE_NOT_ALLOWED",
+        PluginErrorCode::LoginFlowNotFound => "LOGIN_FLOW_NOT_FOUND",
+        PluginErrorCode::LoginFlowExpired => "LOGIN_FLOW_EXPIRED",
+        PluginErrorCode::LoginPending => "LOGIN_PENDING",
+        PluginErrorCode::LoginDenied => "LOGIN_DENIED",
         PluginErrorCode::RateLimited => "RATE_LIMITED",
         PluginErrorCode::PlatformResponseChanged => "PLATFORM_RESPONSE_CHANGED",
         PluginErrorCode::PluginInternalError => "PLUGIN_INTERNAL_ERROR",
