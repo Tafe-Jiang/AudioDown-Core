@@ -30,9 +30,24 @@ const MAX_PLATFORM_ID_BYTES: usize = 64;
 pub struct CookieJarSessionId(Uuid);
 
 impl CookieJarSessionId {
+    pub fn parse(value: impl AsRef<str>) -> Result<Self, CookieJarSessionIdParseError> {
+        let value = value.as_ref();
+        let parsed = Uuid::parse_str(value).map_err(|_| CookieJarSessionIdParseError::Invalid)?;
+        if parsed.to_string() != value {
+            return Err(CookieJarSessionIdParseError::Invalid);
+        }
+        Ok(Self(parsed))
+    }
+
     pub fn as_uuid(self) -> Uuid {
         self.0
     }
+}
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum CookieJarSessionIdParseError {
+    #[error("Cookie Jar session ID must be a canonical UUID")]
+    Invalid,
 }
 
 impl fmt::Debug for CookieJarSessionId {

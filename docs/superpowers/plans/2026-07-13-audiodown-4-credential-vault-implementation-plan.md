@@ -600,13 +600,19 @@ git commit -m "阶段4：实现临时 Cookie Jar" \
 - Modify: `crates/audiodown-server/src/main.rs`
 - Modify: `crates/audiodown-server/Cargo.toml`
 - Create: `crates/audiodown-server/tests/proxy_gateway.rs`
+- Modify: `crates/audiodown-network-proxy/src/cookie_jar.rs`
 - Modify: `Cargo.lock`
 
-- [ ] **Step 1: Write failing gateway tests**
+Design correction: the Node SDK sends the opaque Cookie Jar session ID over the
+bounded JSON gateway protocol, while Task 11 intentionally kept the UUID field
+private and omitted a parser. Task 12 therefore adds only a canonical public
+UUID parser to `CookieJarSessionId`; Jar creation and ownership remain in Core.
+
+- [x] **Step 1: Write failing gateway tests**
 
 Cover 256-bit token generation, runtime-generation-to-plugin binding, registration/revocation, one bounded JSON request per Unix connection, wrong/missing/stale/revoked token rejection, claimed plugin spoofing rejection, manifest-derived hosts plus persisted scope grants and credential origins, concurrency, idle timeout, malformed/oversized messages, socket cleanup, and redacted token Debug/log output. The backend must expose no HTTP route and accept no request that bypasses the token registry.
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 ```bash
 cargo test -p audiodown-server --test proxy_gateway
@@ -614,11 +620,11 @@ cargo test -p audiodown-server --test proxy_gateway
 
 Expected: FAIL because Core has no proxy gateway or token registry.
 
-- [ ] **Step 3: Implement minimum gateway**
+- [x] **Step 3: Implement minimum gateway**
 
 Start a Unix listener at the configured dedicated proxy path, register runtime-generation-bound tokens in memory, derive plugin policy from SQLite installation state, current grants, and credential origins, call `audiodown-network-proxy`, and revoke all tokens on shutdown or runtime replacement. The Socket directory contains no other Core files and is intended only for the fixed Gateway sidecar added in Task 13.
 
-- [ ] **Step 4: Run gateway checks**
+- [x] **Step 4: Run gateway checks**
 
 ```bash
 cargo test -p audiodown-server --test proxy_gateway
@@ -626,10 +632,10 @@ cargo test -p audiodown-server
 cargo clippy -p audiodown-server --all-targets -- -D warnings
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
-git add Cargo.lock crates/audiodown-server
+git add Cargo.lock crates/audiodown-server crates/audiodown-network-proxy/src/cookie_jar.rs docs/superpowers/plans/2026-07-13-audiodown-4-credential-vault-implementation-plan.md
 git commit -m "阶段4：开放受认证代理后端" \
   -m "使用临时运行令牌将代理请求绑定到可信插件身份。"
 ```

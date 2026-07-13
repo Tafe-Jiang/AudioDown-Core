@@ -7,6 +7,8 @@ use semver::Version;
 
 use crate::content_adapters::ContentApiService;
 use crate::plugin_manager_adapters::{UnavailablePluginStateStore, UnavailableRepositorySource};
+use crate::proxy_adapters::SqliteCoreProxyBackend;
+use crate::proxy_gateway::ProxyTokenRegistry;
 
 pub use crate::supervisor::{
     SupervisorClient, SupervisorError, SupervisorHealth, UnavailableSupervisorClient,
@@ -20,6 +22,7 @@ pub struct AppState {
     pub plugin_manager: Arc<PluginManagerService>,
     pub content: Arc<ContentApiService>,
     pub development: DevelopmentConfig,
+    pub proxy_runtime: Option<Arc<ProxyRuntimeState>>,
 }
 
 impl AppState {
@@ -46,6 +49,7 @@ impl AppState {
             plugin_manager,
             content,
             development: DevelopmentConfig::default(),
+            proxy_runtime: None,
         }
     }
 
@@ -61,6 +65,22 @@ impl AppState {
     pub fn with_development(mut self, enabled: bool, token: Option<SecretString>) -> Self {
         self.development = DevelopmentConfig { enabled, token };
         self
+    }
+
+    pub fn with_proxy_runtime(mut self, proxy_runtime: Arc<ProxyRuntimeState>) -> Self {
+        self.proxy_runtime = Some(proxy_runtime);
+        self
+    }
+}
+
+pub struct ProxyRuntimeState {
+    pub tokens: Arc<ProxyTokenRegistry>,
+    pub backend: Arc<SqliteCoreProxyBackend>,
+}
+
+impl ProxyRuntimeState {
+    pub fn new(tokens: Arc<ProxyTokenRegistry>, backend: Arc<SqliteCoreProxyBackend>) -> Self {
+        Self { tokens, backend }
     }
 }
 

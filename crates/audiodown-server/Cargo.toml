@@ -12,13 +12,16 @@ audiodown-content.workspace = true
 audiodown-credential-vault = { path = "../audiodown-credential-vault" }
 audiodown-domain = { path = "../audiodown-domain" }
 audiodown-logging = { path = "../audiodown-logging" }
+audiodown-network-proxy = { path = "../audiodown-network-proxy" }
 audiodown-plugin-api = { path = "../audiodown-plugin-api" }
 audiodown-plugin-manager = { path = "../audiodown-plugin-manager" }
 audiodown-storage = { path = "../audiodown-storage" }
 audiodown-supervisor-protocol.workspace = true
 axum.workspace = true
+base64.workspace = true
 chrono.workspace = true
 mime_guess.workspace = true
+rand_core.workspace = true
 rust-embed.workspace = true
 semver.workspace = true
 secrecy.workspace = true
@@ -36,3 +39,4 @@ uuid.workspace = true
 flate2.workspace = true
 tar.workspace = true
 tempfile = "3.20"
+tracing-subscriber.workspace = true

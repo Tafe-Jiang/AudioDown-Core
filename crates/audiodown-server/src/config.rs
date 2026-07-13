@@ -16,6 +16,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub database_url: String,
     pub supervisor_socket: PathBuf,
+    pub proxy_socket: PathBuf,
     pub core_token_file: PathBuf,
     pub log_filter: String,
     pub dev_mode: bool,
@@ -59,6 +60,10 @@ impl Config {
                 "AUDIODOWN_SUPERVISOR_SOCKET",
                 "/run/audiodown/supervisor.sock",
             )),
+            proxy_socket: PathBuf::from(env_value(
+                "AUDIODOWN_PROXY_SOCKET",
+                "/run/audiodown-proxy/core.sock",
+            )),
             core_token_file: PathBuf::from(env_value(
                 "AUDIODOWN_CORE_TOKEN_FILE",
                 "/run/audiodown/core.token",
@@ -82,6 +87,9 @@ impl Config {
             data_dir: PathBuf::from("/tmp/audiodown-test"),
             database_url: "sqlite::memory:".to_string(),
             supervisor_socket: PathBuf::from("/tmp/audiodown-supervisor.sock"),
+            proxy_socket: env::temp_dir()
+                .join(format!("audiodown-proxy-{}", uuid::Uuid::new_v4()))
+                .join("core.sock"),
             core_token_file: PathBuf::from("/tmp/audiodown-core.token"),
             log_filter: "info".to_string(),
             dev_mode: true,
@@ -109,6 +117,11 @@ impl Config {
 
     pub fn master_key_path(&self) -> PathBuf {
         self.credentials_dir().join("master.key")
+    }
+
+    pub fn with_proxy_socket(mut self, path: impl Into<PathBuf>) -> Self {
+        self.proxy_socket = path.into();
+        self
     }
 }
 
