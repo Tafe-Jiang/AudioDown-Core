@@ -834,6 +834,7 @@ git commit -m "阶段4：开放凭据管理接口" \
 ### Task 17: Require Explicit Credential Disposition on Uninstall
 
 **Files:**
+- Create: `migrations/0005_credential_deletion.sql`
 - Modify: `crates/audiodown-server/src/routes/plugins.rs`
 - Modify: `crates/audiodown-server/tests/plugin_management_api.rs`
 - Modify: `crates/audiodown-server/tests/credential_api.rs`
@@ -859,7 +860,7 @@ Expected: FAIL because uninstall has no credential disposition.
 
 - [ ] **Step 3: Implement minimum disposition flow**
 
-Add a strict query/body choice, the explicit pending-delete state machine, retained ownership clearing, grant revocation, retry-safe delete logging, and UI controls. Do not silently delete or retain credentials and never leave a credential owned by an absent plugin.
+Add a forward-only migration for the explicit pending-delete state, then add a strict query/body choice, retained ownership clearing, grant revocation, retry-safe delete logging, and UI controls. Do not silently delete or retain credentials and never leave a credential owned by an absent plugin.
 
 - [ ] **Step 4: Run uninstall checks**
 
@@ -873,7 +874,7 @@ cd web && npm run typecheck
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/audiodown-server crates/audiodown-storage web
+git add migrations/0005_credential_deletion.sql crates/audiodown-server crates/audiodown-storage web
 git commit -m "阶段4：明确卸载凭据处置" \
   -m "卸载凭据插件时要求用户选择保留或删除加密凭据。"
 ```
