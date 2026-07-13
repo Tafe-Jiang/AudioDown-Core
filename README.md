@@ -20,6 +20,23 @@ Supervisor。
 ./scripts/verify.sh
 ```
 
+## 项目进度
+
+| 阶段 | 状态 | 完成情况 |
+| --- | --- | --- |
+| 阶段 1：基础骨架 | 已完成 | Rust Core、Supervisor、SQLite、结构化日志、Vue 空状态 UI、Compose、Node 插件 SDK 和虚拟插件生命周期闭环 |
+| 阶段 2：安全插件安装 | 已完成 | GitHub 公共仓库检查、Commit 锁定、manifest 与依赖校验、固定 Node 构建、风险授权和安装记录 |
+| 阶段 3：内容聚合 | 已完成 | 五种虚拟内容能力、搜索与发现聚合、筛选、优先级、回退、分页、去重、专辑与曲目 UI |
+| 阶段 4：凭据金库 | 未开始 | AES-256-GCM 金库、虚拟凭据插件和凭据作用域代理 |
+| 阶段 5：任务与下载器 | 未开始 | 虚拟资源下载计划、任务状态机和 Core 下载器 |
+| 阶段 6：安全与发布 | 未开始 | 安全矩阵、迁移接口、诊断包、文档和发布验证 |
+
+已完成阶段的验收记录：
+
+- [阶段 1 验收](docs/phase-1-acceptance.md)
+- [阶段 2 验收](docs/phase-2-acceptance.md)
+- [阶段 3 验收](docs/phase-3-acceptance.md)
+
 ## 插件仓库
 
 用户可以在插件页输入 GitHub 公共仓库地址。Core 先解析默认分支并锁定一个
@@ -58,10 +75,10 @@ Supervisor。
 - 不自动检查或安装插件更新。
 - 不包含任何真实平台插件或真实下载能力。
 - 不包含凭据、Cookie 或登录处理。
-- 不提供搜索、发现、专辑或曲目数据。
+- 搜索、发现、专辑和曲目能力仅由虚拟内容插件提供。
 - 不提供下载、整理归档、格式转换或后处理。
-- 虚拟插件和虚拟仓库只用于 manifest、构建、RPC、生命周期、日志和容器隔离
-  的契约测试。
+- 虚拟插件和虚拟仓库只用于 manifest、构建、RPC、内容聚合、生命周期、日志
+  和容器隔离的契约测试。
 
 设计规格见
 [`docs/superpowers/specs/2026-07-11-audiodown-1-plugin-platform-design.md`](docs/superpowers/specs/2026-07-11-audiodown-1-plugin-platform-design.md)。
