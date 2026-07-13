@@ -124,10 +124,13 @@ dependencies = [
  "aes",
  "aes-gcm",
  "audiodown-domain",
+ "exacl",
  "ghash",
  "polyval",
  "rand_core 0.6.4",
+ "rustix",
  "secrecy",
+ "tempfile",
  "thiserror",
  "zeroize",
 ]
@@ -205,6 +208,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "audiodown-content",
+ "audiodown-credential-vault",
  "audiodown-domain",
  "audiodown-logging",
  "audiodown-plugin-api",
@@ -768,6 +772,18 @@ dependencies = [
  "concurrent-queue",
  "parking",
  "pin-project-lite",
+]
+
+[[package]]
+name = "exacl"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8de9e551ced9d700a31dacb8b168129640240fcd7a279a3fa4d59608b84ebcae"
+dependencies = [
+ "bitflags",
+ "log",
+ "scopeguard",
+ "uuid",
 ]
 
 [[package]]

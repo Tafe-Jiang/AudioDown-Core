@@ -102,6 +102,14 @@ impl Config {
         }
         Ok(Duration::from_secs(seconds))
     }
+
+    pub fn credentials_dir(&self) -> PathBuf {
+        self.data_dir.join("credentials")
+    }
+
+    pub fn master_key_path(&self) -> PathBuf {
+        self.credentials_dir().join("master.key")
+    }
 }
 
 fn env_value(name: &str, default: &str) -> String {

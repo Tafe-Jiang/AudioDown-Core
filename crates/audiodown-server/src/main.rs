@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use audiodown_credential_vault::load_or_create_master_key;
 use audiodown_plugin_manager::{github::GitHubClient, service::PluginManagerService};
 use audiodown_server::{
     app::build_router,
@@ -18,6 +19,7 @@ use tokio::{net::TcpListener, sync::watch};
 async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     tokio::fs::create_dir_all(&config.data_dir).await?;
+    let _master_key = load_or_create_master_key(config.master_key_path())?;
     tokio::fs::create_dir_all(config.data_dir.join("logs")).await?;
     tokio::fs::create_dir_all(config.data_dir.join("plugins")).await?;
 
