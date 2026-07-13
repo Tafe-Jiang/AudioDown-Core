@@ -6,8 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 audiodown-plugin-api = { path = "../audiodown-plugin-api" }
+flate2.workspace = true
+futures-util.workspace = true
+http.workspace = true
+reqwest = { workspace = true, features = ["http2"] }
 thiserror.workspace = true
+tokio.workspace = true
 url.workspace = true
 
 [dev-dependencies]
