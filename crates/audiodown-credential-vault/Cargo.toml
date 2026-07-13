@@ -1,0 +1,17 @@
+[package]
+name = "audiodown-credential-vault"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aes.workspace = true
+aes-gcm.workspace = true
+audiodown-domain = { path = "../audiodown-domain" }
+ghash.workspace = true
+polyval.workspace = true
+rand_core.workspace = true
+secrecy.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/audiodown-content",
+  "crates/audiodown-credential-vault",
   "crates/audiodown-domain",
   "crates/audiodown-plugin-api",
   "crates/audiodown-plugin-manager",
@@ -19,6 +20,8 @@ license = "Apache-2.0"
 rust-version = "1.88"
 
 [workspace.dependencies]
+aes = { version = "0.9", features = ["zeroize"] }
+aes-gcm = { version = "0.11", features = ["zeroize"] }
 anyhow = "1.0"
 async-trait = "0.1"
 audiodown-content = { path = "crates/audiodown-content" }
@@ -29,10 +32,12 @@ base64 = "0.22"
 bollard = "0.19"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
+ghash = { version = "0.6", features = ["zeroize"] }
 flate2 = "1.1"
 http = "1.3"
 mime_guess = "2.0"
 regex = "1.11"
+rand_core = { version = "0.6", features = ["getrandom"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 rust-embed = "8.7"
 semver = { version = "1.0", features = ["serde"] }
@@ -50,8 +55,10 @@ tower-http = { version = "0.6", features = ["cors", "request-id", "trace", "fs"]
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+polyval = { version = "=0.7.1", features = ["zeroize"] }
 url = { version = "2.5", features = ["serde"] }
 uuid = { version = "1.17", features = ["v4", "v5", "serde"] }
+zeroize = "1.9"
 
 [profile.release]
 lto = true
