@@ -196,7 +196,7 @@ fn rejects_special_permission_bits_and_additional_hard_links() {
 
     fs::set_permissions(credentials_dir, fs::Permissions::from_mode(0o700)).unwrap();
     fs::write(&key_path, [0x45; 32]).unwrap();
-    fs::set_permissions(&key_path, fs::Permissions::from_mode(0o2600)).unwrap();
+    fs::set_permissions(&key_path, fs::Permissions::from_mode(0o1600)).unwrap();
     assert!(matches!(
         load_or_create_master_key(&key_path),
         Err(CredentialKeyStoreError::UnsafeMasterKeyPermissions)
