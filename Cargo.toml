@@ -4,6 +4,7 @@ members = [
   "crates/audiodown-content",
   "crates/audiodown-credential-vault",
   "crates/audiodown-domain",
+  "crates/audiodown-network-proxy",
   "crates/audiodown-plugin-api",
   "crates/audiodown-plugin-manager",
   "crates/audiodown-storage",

@@ -168,6 +168,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "audiodown-network-proxy"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "audiodown-plugin-api",
+ "serde_json",
+ "thiserror",
+ "url",
+]
+
+[[package]]
 name = "audiodown-plugin-api"
 version = "1.0.0-alpha.1"
 dependencies = [
