@@ -7,14 +7,24 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+audiodown-credential-vault = { path = "../audiodown-credential-vault" }
+audiodown-domain = { path = "../audiodown-domain" }
 audiodown-plugin-api = { path = "../audiodown-plugin-api" }
+chrono.workspace = true
+cookie_store = { version = "0.22.1", default-features = false }
 flate2.workspace = true
 futures-util.workspace = true
 http.workspace = true
+psl = "2.1.218"
 reqwest = { workspace = true, features = ["http2"] }
+secrecy.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+tracing-subscriber.workspace = true

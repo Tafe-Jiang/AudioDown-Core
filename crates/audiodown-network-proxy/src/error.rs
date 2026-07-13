@@ -28,4 +28,6 @@ pub enum HttpProxyError {
     InvalidResponseEncoding,
     #[error("proxy transport failed")]
     Transport,
+    #[error("proxy request was rejected by Core authorization")]
+    RequestRejected,
 }

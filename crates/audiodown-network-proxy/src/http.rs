@@ -96,6 +96,70 @@ pub trait HttpTransport: Send + Sync + 'static {
     ) -> Result<TransportResponse, TransportError>;
 }
 
+#[doc(hidden)]
+#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
+#[error("HTTP request hook rejected the request")]
+pub struct HttpHookError;
+
+#[doc(hidden)]
+#[async_trait]
+pub trait HttpHopHook: Send + Sync {
+    type HopState: Send;
+
+    async fn prepare(
+        &self,
+        target: &PinnedTarget,
+        request: &mut TransportRequest,
+    ) -> Result<Self::HopState, HttpHookError>;
+
+    async fn observe(
+        &self,
+        target: &PinnedTarget,
+        state: &Self::HopState,
+        response: &TransportResponse,
+    ) -> Result<(), HttpHookError>;
+
+    fn validate_visible(
+        &self,
+        target: &PinnedTarget,
+        state: &Self::HopState,
+        response: &ProxyResponse,
+    ) -> Result<(), HttpHookError>;
+}
+
+struct NoopHttpHopHook;
+
+#[async_trait]
+impl HttpHopHook for NoopHttpHopHook {
+    type HopState = ();
+
+    async fn prepare(
+        &self,
+        _target: &PinnedTarget,
+        _request: &mut TransportRequest,
+    ) -> Result<Self::HopState, HttpHookError> {
+        Ok(())
+    }
+
+    async fn observe(
+        &self,
+        _target: &PinnedTarget,
+        _state: &Self::HopState,
+        _response: &TransportResponse,
+    ) -> Result<(), HttpHookError> {
+        Ok(())
+    }
+
+    fn validate_visible(
+        &self,
+        _target: &PinnedTarget,
+        _state: &Self::HopState,
+        _response: &ProxyResponse,
+    ) -> Result<(), HttpHookError> {
+        Ok(())
+    }
+}
+
 pub struct HttpProxy<R, T> {
     policy: ProxyPolicy,
     resolver: Arc<Mutex<R>>,
@@ -122,6 +186,17 @@ where
     }
 
     pub async fn execute(&self, request: ProxyRequest) -> Result<ProxyResponse, HttpProxyError> {
+        self.execute_with_hook(request, &NoopHttpHopHook).await
+    }
+
+    pub(crate) async fn execute_with_hook<H>(
+        &self,
+        request: ProxyRequest,
+        hook: &H,
+    ) -> Result<ProxyResponse, HttpProxyError>
+    where
+        H: HttpHopHook,
+    {
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         let _permit = self
             .requests
@@ -139,12 +214,20 @@ where
         let mut redirects = 0;
 
         loop {
-            let transport_request = TransportRequest {
+            let mut transport_request = TransportRequest {
                 method: request.method.clone(),
                 url: target.url().to_string(),
                 headers: request.headers.clone(),
                 body: request.body.clone(),
             };
+            let hook_state = timeout_at(deadline, hook.prepare(&target, &mut transport_request))
+                .await
+                .map_err(|_| HttpProxyError::Timeout)?
+                .map_err(|_| HttpProxyError::RequestRejected)?;
+            validate_core_request_headers(&transport_request.headers)?;
+            if transport_request.body.len() > MAX_REQUEST_BODY_BYTES {
+                return Err(HttpProxyError::RequestBodyTooLarge);
+            }
             let response = timeout_at(deadline, self.transport.execute(&target, transport_request))
                 .await
                 .map_err(|_| HttpProxyError::Timeout)?
@@ -155,6 +238,10 @@ where
             if response.body.len() > MAX_RAW_RESPONSE_BODY_BYTES {
                 return Err(HttpProxyError::ResponseBodyTooLarge);
             }
+            timeout_at(deadline, hook.observe(&target, &hook_state, &response))
+                .await
+                .map_err(|_| HttpProxyError::Timeout)?
+                .map_err(|_| HttpProxyError::RequestRejected)?;
 
             if is_redirect(response.status) {
                 if redirects >= MAX_REDIRECTS {
@@ -186,11 +273,14 @@ where
             let body = self
                 .decode_body(response.headers, response.body, deadline)
                 .await?;
-            return Ok(ProxyResponse {
+            let response = ProxyResponse {
                 status: response.status,
                 headers: filtered_headers,
                 body,
-            });
+            };
+            hook.validate_visible(&target, &hook_state, &response)
+                .map_err(|_| HttpProxyError::RequestRejected)?;
+            return Ok(response);
         }
     }
 
@@ -342,6 +432,20 @@ fn validate_request_headers(headers: &HeaderMap) -> Result<(), HttpProxyError> {
     if headers.len() > MAX_REQUEST_HEADERS
         || header_bytes(headers).is_none_or(|bytes| bytes > MAX_REQUEST_HEADER_BYTES)
         || headers.keys().any(forbidden_request_header)
+    {
+        Err(HttpProxyError::RequestHeadersTooLarge)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_core_request_headers(headers: &HeaderMap) -> Result<(), HttpProxyError> {
+    if headers.len() > MAX_REQUEST_HEADERS
+        || header_bytes(headers).is_none_or(|bytes| bytes > MAX_REQUEST_HEADER_BYTES)
+        || (headers.contains_key(header::COOKIE) && headers.contains_key(header::AUTHORIZATION))
+        || headers.keys().any(|name| {
+            !matches!(name.as_str(), "cookie" | "authorization") && forbidden_request_header(name)
+        })
     {
         Err(HttpProxyError::RequestHeadersTooLarge)
     } else {
