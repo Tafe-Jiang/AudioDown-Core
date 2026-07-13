@@ -51,7 +51,12 @@ async fn exposes_repository_inspection_without_supervisor_access() {
             "pluginType": "content",
             "alreadyInstalled": false,
             "requiresLifecycleScriptGrant": false,
-            "lifecycleScriptReason": null
+            "lifecycleScriptReason": null,
+            "credentials": {
+                "providedScopes": [],
+                "requiredScopes": [],
+                "optionalScopes": []
+            }
         }])
     );
 }

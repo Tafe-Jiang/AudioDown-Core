@@ -205,6 +205,18 @@ export interface RepositoryPluginPreview {
   alreadyInstalled: boolean;
   requiresLifecycleScriptGrant: boolean;
   lifecycleScriptReason: string | null;
+  credentials: CredentialDeclarations;
+}
+
+export interface CredentialScopeDeclaration {
+  scope: string;
+  targetOrigins: string[];
+}
+
+export interface CredentialDeclarations {
+  providedScopes: CredentialScopeDeclaration[];
+  requiredScopes: CredentialScopeDeclaration[];
+  optionalScopes: CredentialScopeDeclaration[];
 }
 
 export interface RepositoryPreview {

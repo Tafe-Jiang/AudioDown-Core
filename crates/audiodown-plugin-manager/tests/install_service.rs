@@ -1038,6 +1038,7 @@ fn manifest(requires_scripts: bool) -> PluginManifest {
         network: NetworkPolicy {
             allowed_hosts: Vec::new(),
         },
+        credentials: Default::default(),
         build: BuildSpec {
             npm_lifecycle_scripts: LifecycleScriptPolicy {
                 required: requires_scripts,

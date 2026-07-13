@@ -5,7 +5,7 @@ use std::{
 };
 
 use audiodown_domain::plugin::PluginId;
-use audiodown_plugin_api::manifest::{PluginManifest, PluginType};
+use audiodown_plugin_api::manifest::{CredentialDeclarations, PluginManifest, PluginType};
 use chrono::{DateTime, Duration, Utc};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -184,6 +184,7 @@ impl SnapshotStore {
             || manifest.name != plugin.name
             || manifest.version != plugin.version
             || manifest.plugin_type != plugin.plugin_type
+            || manifest.credentials != plugin.credentials
         {
             return Err(PluginManagerError::InvalidStagingMetadata);
         }
@@ -304,6 +305,7 @@ pub struct PluginPreview {
     pub name: String,
     pub version: Version,
     pub plugin_type: PluginType,
+    pub credentials: CredentialDeclarations,
     pub requires_lifecycle_script_grant: bool,
     pub lifecycle_script_reason: Option<String>,
 }
@@ -315,6 +317,7 @@ impl From<ValidatedPlugin> for PluginPreview {
             name: value.manifest.name,
             version: value.manifest.version,
             plugin_type: value.manifest.plugin_type,
+            credentials: value.manifest.credentials,
             requires_lifecycle_script_grant: value.requires_lifecycle_scripts,
             lifecycle_script_reason: value.lifecycle_script_reason,
         }
@@ -363,6 +366,8 @@ struct SnapshotPlugin {
     name: String,
     version: Version,
     plugin_type: PluginType,
+    #[serde(default)]
+    credentials: CredentialDeclarations,
     plugin_path: String,
     manifest_hash: String,
     source_hash: String,
@@ -377,6 +382,7 @@ impl From<&ValidatedPlugin> for SnapshotPlugin {
             name: value.manifest.name.clone(),
             version: value.manifest.version.clone(),
             plugin_type: value.manifest.plugin_type,
+            credentials: value.manifest.credentials.clone(),
             plugin_path: value.relative_path.clone(),
             manifest_hash: value.manifest_hash.clone(),
             source_hash: value.source_hash.clone(),

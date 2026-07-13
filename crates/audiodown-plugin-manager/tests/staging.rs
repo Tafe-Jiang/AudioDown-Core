@@ -34,6 +34,12 @@ async fn stages_validated_snapshot_and_prepares_exact_operation_metadata() {
         b"export default {};\n"
     );
     assert!(snapshot_root.join("snapshot.json").is_file());
+    assert_eq!(
+        preview.plugins[0].credentials.required_scopes[0]
+            .scope
+            .as_str(),
+        "virtual.web"
+    );
     assert_mode(&snapshot_root, 0o700);
     assert_mode(&snapshot_root.join("repository"), 0o700);
     assert_mode(&snapshot_root.join("snapshot.json"), 0o600);
@@ -264,7 +270,25 @@ fn validated_repository(requires_lifecycle_scripts: bool) -> ValidatedRepository
                 },
                 capabilities: vec!["content.search".to_string()],
                 network: NetworkPolicy {
-                    allowed_hosts: Vec::new(),
+                    allowed_hosts: vec!["account.virtual.invalid".to_string()],
+                },
+                credentials: audiodown_plugin_api::manifest::CredentialDeclarations {
+                    provided_scopes: Vec::new(),
+                    required_scopes: vec![
+                        audiodown_plugin_api::manifest::CredentialScopeDeclaration {
+                            scope: audiodown_domain::credential::CredentialScope::parse(
+                                "virtual.web",
+                            )
+                            .unwrap(),
+                            target_origins: vec![
+                                audiodown_plugin_api::manifest::CredentialTargetOrigin::parse(
+                                    "https://account.virtual.invalid",
+                                )
+                                .unwrap(),
+                            ],
+                        },
+                    ],
+                    optional_scopes: Vec::new(),
                 },
                 build: BuildSpec {
                     npm_lifecycle_scripts: LifecycleScriptPolicy {

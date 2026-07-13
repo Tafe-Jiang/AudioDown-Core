@@ -26,6 +26,11 @@ const preview = {
       alreadyInstalled: false,
       requiresLifecycleScriptGrant: false,
       lifecycleScriptReason: null,
+      credentials: {
+        providedScopes: [],
+        requiredScopes: [],
+        optionalScopes: [],
+      },
     },
   ],
 };
@@ -195,6 +200,57 @@ describe("plugin repository dialog", () => {
     expect(wrapper.text()).not.toContain("sensitive-token");
     expect(localStorage.getItem("sensitive-token")).toBeNull();
     expect(sessionStorage.getItem("sensitive-token")).toBeNull();
+  });
+
+  it("shows exact credential origins and requires an explicit scope decision", async () => {
+    const credentialPreview = {
+      ...preview,
+      plugins: [
+        {
+          ...preview.plugins[0],
+          credentials: {
+            providedScopes: [
+              {
+                scope: "virtual.account",
+                targetOrigins: ["https://account.virtual.invalid"],
+              },
+            ],
+            requiredScopes: [
+              {
+                scope: "virtual.web",
+                targetOrigins: ["https://account.virtual.invalid"],
+              },
+            ],
+            optionalScopes: [
+              {
+                scope: "virtual.media",
+                targetOrigins: ["https://media.virtual.invalid"],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(credentialPreview));
+    vi.stubGlobal("fetch", fetchMock);
+    const wrapper = mountDialog();
+    await inspect(wrapper);
+
+    expect(wrapper.text()).toContain("凭据声明不等于授权");
+    expect(wrapper.text()).toContain("virtual.account");
+    expect(wrapper.text()).toContain("virtual.web");
+    expect(wrapper.text()).toContain("virtual.media");
+    expect(wrapper.text()).toContain("https://account.virtual.invalid");
+    expect(wrapper.text()).toContain("https://media.virtual.invalid");
+
+    const install = wrapper.get('button[type="submit"]');
+    expect(install.attributes()).toHaveProperty("disabled");
+    const requiredDecision = wrapper.get(
+      '[data-scope-decision="required:virtual.web"]',
+    );
+    expect(requiredDecision.attributes("aria-checked")).toBe("false");
+    await requiredDecision.trigger("click");
+    expect(install.attributes()).not.toHaveProperty("disabled");
   });
 
   it("closes and emits the installed item after a normal install", async () => {

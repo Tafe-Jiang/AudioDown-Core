@@ -113,6 +113,7 @@ pub async fn validate_prepared_install(
         || manifest.name != snapshot_plugin.name
         || manifest.version != snapshot_plugin.version
         || manifest.plugin_type != snapshot_plugin.plugin_type
+        || manifest.credentials != snapshot_plugin.credentials
         || manifest.runtime.kind != RuntimeKind::Nodejs
         || manifest.runtime.version != "22"
     {
@@ -542,6 +543,8 @@ struct SnapshotPlugin {
     name: String,
     version: semver::Version,
     plugin_type: audiodown_plugin_api::manifest::PluginType,
+    #[serde(default)]
+    credentials: audiodown_plugin_api::manifest::CredentialDeclarations,
     plugin_path: String,
     manifest_hash: String,
     source_hash: String,

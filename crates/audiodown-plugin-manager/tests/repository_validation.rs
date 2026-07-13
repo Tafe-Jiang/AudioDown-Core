@@ -65,6 +65,207 @@ fn validates_registry_dependencies_and_declared_lifecycle_scripts() {
 }
 
 #[test]
+fn validates_credential_providers_and_content_scope_requests() {
+    let credential = RepositoryFixture::new();
+    credential.mutate_manifest(|manifest| {
+        manifest["id"] = json!("com.audiodown.virtual.credential");
+        manifest["name"] = json!("Virtual Credential");
+        manifest["type"] = json!("credential");
+        manifest["capabilities"] = json!([
+            "credential.qr.start",
+            "credential.qr.poll",
+            "credential.import",
+            "credential.status",
+            "credential.refresh",
+            "credential.logout"
+        ]);
+        manifest["network"]["allowedHosts"] = json!(["account.virtual.invalid"]);
+        manifest["credentials"] = json!({
+            "providedScopes": [{
+                "scope": "virtual.web",
+                "targetOrigins": ["https://account.virtual.invalid"]
+            }]
+        });
+    });
+    validate_repository(
+        credential.root(),
+        &"1.0.0-alpha.1".parse().unwrap(),
+        &"1.0.0".parse().unwrap(),
+        SnapshotLimits::default(),
+    )
+    .unwrap();
+
+    let content = RepositoryFixture::new();
+    content.mutate_manifest(|manifest| {
+        manifest["network"]["allowedHosts"] =
+            json!(["account.virtual.invalid", "media.virtual.invalid"]);
+        manifest["credentials"] = json!({
+            "requiredScopes": [{
+                "scope": "virtual.web",
+                "targetOrigins": ["https://account.virtual.invalid"]
+            }],
+            "optionalScopes": [{
+                "scope": "virtual.media",
+                "targetOrigins": ["https://media.virtual.invalid"]
+            }]
+        });
+    });
+    let validated = validate_repository(
+        content.root(),
+        &"1.0.0-alpha.1".parse().unwrap(),
+        &"1.0.0".parse().unwrap(),
+        SnapshotLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        validated.plugins[0].manifest.credentials.required_scopes[0]
+            .scope
+            .as_str(),
+        "virtual.web"
+    );
+}
+
+#[test]
+fn rejects_invalid_credential_declaration_ownership() {
+    let content_provider = RepositoryFixture::new();
+    content_provider.mutate_manifest(|manifest| {
+        manifest["network"]["allowedHosts"] = json!(["account.virtual.invalid"]);
+        manifest["credentials"] = json!({
+            "providedScopes": [{
+                "scope": "virtual.web",
+                "targetOrigins": ["https://account.virtual.invalid"]
+            }]
+        });
+    });
+    assert_rejected(&content_provider, "content plugin provided scope");
+
+    let credential_requester = RepositoryFixture::new();
+    credential_requester.mutate_manifest(|manifest| {
+        manifest["id"] = json!("com.audiodown.virtual.credential");
+        manifest["type"] = json!("credential");
+        manifest["capabilities"] = json!(["credential.status"]);
+        manifest["network"]["allowedHosts"] = json!(["account.virtual.invalid"]);
+        manifest["credentials"] = json!({
+            "providedScopes": [{
+                "scope": "virtual.web",
+                "targetOrigins": ["https://account.virtual.invalid"]
+            }],
+            "requiredScopes": [{
+                "scope": "virtual.account",
+                "targetOrigins": ["https://account.virtual.invalid"]
+            }]
+        });
+    });
+    assert_rejected(&credential_requester, "credential plugin requested scope");
+
+    let missing_provider = RepositoryFixture::new();
+    missing_provider.mutate_manifest(|manifest| {
+        manifest["id"] = json!("com.audiodown.virtual.credential");
+        manifest["type"] = json!("credential");
+        manifest["capabilities"] = json!(["credential.status"]);
+    });
+    assert_rejected(
+        &missing_provider,
+        "credential plugin missing provided scope",
+    );
+}
+
+#[test]
+fn rejects_credential_plugins_without_credential_capabilities() {
+    let fixture = RepositoryFixture::new();
+    fixture.mutate_manifest(|manifest| {
+        manifest["id"] = json!("com.audiodown.virtual.credential");
+        manifest["type"] = json!("credential");
+        manifest["capabilities"] = json!(["system.health"]);
+        manifest["network"]["allowedHosts"] = json!(["account.virtual.invalid"]);
+        manifest["credentials"] = json!({
+            "providedScopes": [{
+                "scope": "virtual.web",
+                "targetOrigins": ["https://account.virtual.invalid"]
+            }]
+        });
+    });
+    assert_rejected(&fixture, "credential plugin missing credential capability");
+}
+
+#[test]
+fn rejects_duplicate_cross_platform_or_unbounded_scopes() {
+    for credentials in [
+        json!({
+            "requiredScopes": [{
+                "scope": "virtual.web",
+                "targetOrigins": ["https://account.virtual.invalid"]
+            }],
+            "optionalScopes": [{
+                "scope": "virtual.web",
+                "targetOrigins": ["https://account.virtual.invalid"]
+            }]
+        }),
+        json!({
+            "requiredScopes": [{
+                "scope": "other.web",
+                "targetOrigins": ["https://account.virtual.invalid"]
+            }]
+        }),
+        json!({
+            "requiredScopes": [{
+                "scope": "virtual.web",
+                "targetOrigins": []
+            }]
+        }),
+    ] {
+        let fixture = RepositoryFixture::new();
+        fixture.mutate_manifest(|manifest| {
+            manifest["network"]["allowedHosts"] = json!(["account.virtual.invalid"]);
+            manifest["credentials"] = credentials;
+        });
+        assert_rejected(&fixture, "invalid scope declaration");
+    }
+
+    let fixture = RepositoryFixture::new();
+    fixture.mutate_manifest(|manifest| {
+        manifest["network"]["allowedHosts"] = json!(["account.virtual.invalid"]);
+        manifest["credentials"] = json!({
+            "optionalScopes": (0..33)
+                .map(|index| json!({
+                    "scope": format!("virtual.scope{index}"),
+                    "targetOrigins": ["https://account.virtual.invalid"]
+                }))
+                .collect::<Vec<_>>()
+        });
+    });
+    assert_rejected(&fixture, "more than 32 scope declarations");
+}
+
+#[test]
+fn rejects_non_exact_duplicate_or_undeclared_origins() {
+    for origins in [
+        json!(["https://account.virtual.invalid/path"]),
+        json!(["https://account.virtual.invalid?secret=value"]),
+        json!(["https://user@account.virtual.invalid"]),
+        json!(["ftp://account.virtual.invalid"]),
+        json!(["https://*.virtual.invalid"]),
+        json!([
+            "https://account.virtual.invalid",
+            "https://account.virtual.invalid/"
+        ]),
+        json!(["https://undeclared.virtual.invalid"]),
+    ] {
+        let fixture = RepositoryFixture::new();
+        fixture.mutate_manifest(|manifest| {
+            manifest["network"]["allowedHosts"] = json!(["account.virtual.invalid"]);
+            manifest["credentials"] = json!({
+                "requiredScopes": [{
+                    "scope": "virtual.web",
+                    "targetOrigins": origins
+                }]
+            });
+        });
+        assert_rejected(&fixture, "invalid exact target origin");
+    }
+}
+
+#[test]
 fn hashes_source_files_in_stable_path_order() {
     let first = RepositoryFixture::new();
     first.write_file(&format!("{PLUGIN_PATH}/z.txt"), b"z");

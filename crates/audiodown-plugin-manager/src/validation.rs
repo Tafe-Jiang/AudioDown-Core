@@ -7,12 +7,17 @@ use std::{
 };
 
 use audiodown_plugin_api::{
-    manifest::{capability_is_supported, PluginManifest},
+    credential::CredentialMethod,
+    manifest::{
+        capability_is_supported, CredentialScopeDeclaration, PluginManifest, PluginType,
+        MAX_CREDENTIAL_SCOPE_DECLARATIONS, MAX_CREDENTIAL_TARGET_ORIGINS,
+    },
     repository::RepositoryIndex,
 };
 use regex::Regex;
 use semver::{BuildMetadata, Prerelease, Version, VersionReq};
 use sha2::{Digest, Sha256};
+use url::Url;
 
 use crate::{archive::SnapshotLimits, package::validate_package, PluginManagerError};
 
@@ -140,6 +145,9 @@ fn validate_manifest(
     if manifest.schema_version != "1.0" || manifest.runtime.version != "22" {
         return Err(PluginManagerError::InvalidPluginManifest);
     }
+    if !platform_id_pattern().is_match(&manifest.platform.id) {
+        return Err(PluginManagerError::InvalidPluginManifest);
+    }
 
     let core_requirement = parse_version_requirement(&manifest.compatibility.core)?;
     let plugin_api_requirement = parse_version_requirement(&manifest.compatibility.plugin_api)?;
@@ -158,6 +166,14 @@ fn validate_manifest(
             return Err(PluginManagerError::InvalidPluginManifest);
         }
     }
+    if manifest.plugin_type == PluginType::Credential
+        && !manifest
+            .capabilities
+            .iter()
+            .any(|capability| CredentialMethod::from_capability(capability).is_some())
+    {
+        return Err(PluginManagerError::InvalidPluginManifest);
+    }
 
     let mut allowed_hosts = HashSet::new();
     for host in &manifest.network.allowed_hosts {
@@ -165,6 +181,7 @@ fn validate_manifest(
             return Err(PluginManagerError::InvalidPluginManifest);
         }
     }
+    validate_credential_declarations(manifest)?;
 
     let policy = &manifest.build.npm_lifecycle_scripts;
     if policy.required {
@@ -184,6 +201,88 @@ fn validate_manifest(
         return Err(PluginManagerError::InvalidPluginManifest);
     }
     Ok(())
+}
+
+fn validate_credential_declarations(manifest: &PluginManifest) -> Result<(), PluginManagerError> {
+    let credentials = &manifest.credentials;
+    if credentials.declaration_count() > MAX_CREDENTIAL_SCOPE_DECLARATIONS {
+        return Err(PluginManagerError::InvalidPluginManifest);
+    }
+
+    match manifest.plugin_type {
+        PluginType::Content if !credentials.provided_scopes.is_empty() => {
+            return Err(PluginManagerError::InvalidPluginManifest);
+        }
+        PluginType::Credential
+            if credentials.provided_scopes.is_empty()
+                || !credentials.required_scopes.is_empty()
+                || !credentials.optional_scopes.is_empty() =>
+        {
+            return Err(PluginManagerError::InvalidPluginManifest);
+        }
+        PluginType::Content | PluginType::Credential => {}
+    }
+
+    let mut scopes = HashSet::new();
+    for declaration in credentials
+        .provided_scopes
+        .iter()
+        .chain(&credentials.required_scopes)
+        .chain(&credentials.optional_scopes)
+    {
+        validate_scope_declaration(manifest, declaration, &mut scopes)?;
+    }
+    Ok(())
+}
+
+fn validate_scope_declaration<'a>(
+    manifest: &PluginManifest,
+    declaration: &'a CredentialScopeDeclaration,
+    scopes: &mut HashSet<&'a str>,
+) -> Result<(), PluginManagerError> {
+    if !scopes.insert(declaration.scope.as_str())
+        || declaration
+            .scope
+            .as_str()
+            .split_once('.')
+            .is_none_or(|(platform, _)| platform != manifest.platform.id)
+        || declaration.target_origins.is_empty()
+        || declaration.target_origins.len() > MAX_CREDENTIAL_TARGET_ORIGINS
+    {
+        return Err(PluginManagerError::InvalidPluginManifest);
+    }
+
+    let mut origins = HashSet::new();
+    for origin in &declaration.target_origins {
+        if !origins.insert(origin.as_str()) {
+            return Err(PluginManagerError::InvalidPluginManifest);
+        }
+        let parsed =
+            Url::parse(origin.as_str()).map_err(|_| PluginManagerError::InvalidPluginManifest)?;
+        let host = parsed
+            .host_str()
+            .ok_or(PluginManagerError::InvalidPluginManifest)?;
+        if !manifest
+            .network
+            .allowed_hosts
+            .iter()
+            .any(|allowed| allowed_host_matches(allowed, host))
+        {
+            return Err(PluginManagerError::InvalidPluginManifest);
+        }
+    }
+    Ok(())
+}
+
+fn allowed_host_matches(allowed: &str, host: &str) -> bool {
+    match allowed.strip_prefix("*.") {
+        Some(suffix) => {
+            host.len() > suffix.len()
+                && host.ends_with(suffix)
+                && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+        }
+        None => allowed == host,
+    }
 }
 
 fn validate_plugin_tree(plugin_root: &Path) -> Result<(), PluginManagerError> {
@@ -361,6 +460,11 @@ fn repository_id_pattern() -> &'static Regex {
     PATTERN.get_or_init(|| {
         Regex::new(r"^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$").expect("valid repository ID regex")
     })
+}
+
+fn platform_id_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| Regex::new(r"^[a-z][a-z0-9]{0,31}$").expect("valid platform id regex"))
 }
 
 fn capability_pattern() -> &'static Regex {

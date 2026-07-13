@@ -47,6 +47,7 @@ const inspecting = ref(false);
 const error = ref("");
 const riskApproved = ref(false);
 const developerToken = ref("");
+const scopeGrantDecisions = ref<Record<string, boolean>>({});
 
 const selectedPlugin = computed(
   () =>
@@ -57,12 +58,22 @@ const selectedPlugin = computed(
 const requiresRiskGrant = computed(
   () => selectedPlugin.value?.requiresLifecycleScriptGrant === true,
 );
+const requiredScopeDecisionsComplete = computed(
+  () =>
+    selectedPlugin.value?.credentials.requiredScopes.every(
+      (declaration) =>
+        scopeGrantDecisions.value[`required:${declaration.scope}`] === true,
+    ) ?? true,
+);
 const installDisabled = computed(() => {
   if (
     !props.supervisorAvailable ||
     !selectedPlugin.value ||
     selectedPlugin.value.alreadyInstalled
   ) {
+    return true;
+  }
+  if (!requiredScopeDecisionsComplete.value) {
     return true;
   }
   if (!requiresRiskGrant.value) {
@@ -84,6 +95,15 @@ function resetRiskApproval() {
   clearDeveloperToken();
 }
 
+function resetScopeGrantDecisions() {
+  scopeGrantDecisions.value = {};
+}
+
+function resetPluginReview() {
+  resetRiskApproval();
+  resetScopeGrantDecisions();
+}
+
 function resetDialog() {
   step.value = "url";
   repositoryUrl.value = "";
@@ -91,7 +111,7 @@ function resetDialog() {
   selectedPluginId.value = "";
   inspecting.value = false;
   error.value = "";
-  resetRiskApproval();
+  resetPluginReview();
 }
 
 function closeDialog() {
@@ -110,7 +130,7 @@ function goBack() {
   preview.value = null;
   selectedPluginId.value = "";
   error.value = "";
-  resetRiskApproval();
+  resetPluginReview();
 }
 
 async function inspectRepository() {
@@ -126,7 +146,7 @@ async function inspectRepository() {
     const result = await api.inspectRepository(url);
     preview.value = result;
     selectedPluginId.value = result.plugins[0]?.pluginId ?? "";
-    resetRiskApproval();
+    resetPluginReview();
     step.value = "preview";
   } catch {
     error.value = "仓库检查失败，请确认地址和仓库内容";
@@ -170,7 +190,7 @@ async function submit() {
   }
 }
 
-watch(selectedPluginId, resetRiskApproval);
+watch(selectedPluginId, resetPluginReview);
 watch(
   () => props.open,
   (open) => {
@@ -216,6 +236,7 @@ onBeforeUnmount(clearDeveloperToken);
       <RepositoryPreview
         v-else-if="preview"
         v-model:selected-plugin-id="selectedPluginId"
+        v-model:scope-grant-decisions="scopeGrantDecisions"
         :preview="preview"
       />
 
