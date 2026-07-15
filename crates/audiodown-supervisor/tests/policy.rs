@@ -1,4 +1,9 @@
 use audiodown_domain::plugin::PluginId;
+use audiodown_supervisor::docker::{
+    discover_runtime_plugin_ids, network_is_healthy, network_is_owned_for_cleanup,
+    plugin_container_config, reconcile_cleanup_results, PLUGIN_BOOTSTRAP_PATH,
+    PROXY_TOKEN_SECRET_DIR,
+};
 use audiodown_supervisor::policy::{
     GatewayRuntimeConfig, InstalledPlugin, PluginContainerPolicy, PluginRuntimePolicy,
     PROXY_BACKEND_SOCKET, PROXY_GATEWAY_ALIAS, PROXY_GATEWAY_URL,
@@ -133,6 +138,93 @@ fn rejects_invalid_deployment_owned_gateway_configuration() {
     for image in ["", "image with spaces", "\0"] {
         assert!(GatewayRuntimeConfig::new(image, "audiodown-proxy").is_err());
     }
+}
+
+#[test]
+fn plugin_container_metadata_excludes_token_and_uses_tmpfs_bootstrap() {
+    let token_canary = "docker-config-token-canary";
+    let runtime = PluginRuntimePolicy::build(
+        installed_plugin(PluginId::parse("com.audiodown.virtual.content").unwrap()),
+        GatewayRuntimeConfig::default(),
+        ProxyToken::new(token_canary).unwrap(),
+    )
+    .unwrap();
+
+    let config = plugin_container_config(&runtime.plugin);
+    let encoded = serde_json::to_string(&config).unwrap();
+    assert!(!encoded.contains(token_canary));
+    assert_eq!(
+        config.entrypoint,
+        Some(vec![PLUGIN_BOOTSTRAP_PATH.to_string()])
+    );
+    assert!(config
+        .env
+        .unwrap_or_default()
+        .iter()
+        .all(|entry| !entry.starts_with("AUDIODOWN_PROXY_TOKEN=")));
+    assert!(config
+        .host_config
+        .unwrap()
+        .tmpfs
+        .unwrap()
+        .contains_key(PROXY_TOKEN_SECRET_DIR));
+}
+
+#[test]
+fn cleanup_ownership_is_independent_of_network_health() {
+    let plugin_id = PluginId::parse("com.audiodown.virtual.content").unwrap();
+    let labels = std::collections::HashMap::from([
+        ("io.audiodown.managed".to_string(), "true".to_string()),
+        (
+            "io.audiodown.installation".to_string(),
+            "installation-test".to_string(),
+        ),
+        ("io.audiodown.plugin-id".to_string(), plugin_id.to_string()),
+        ("io.audiodown.resource".to_string(), "network".to_string()),
+    ]);
+
+    assert!(network_is_owned_for_cleanup(
+        &labels,
+        "installation-test",
+        &plugin_id
+    ));
+    assert!(!network_is_healthy(false, true));
+}
+
+#[test]
+fn startup_discovery_covers_all_runtime_resources_and_aggregates_failures() {
+    let plugin = PluginId::parse("com.audiodown.virtual.content").unwrap();
+    let gateway = PluginId::parse("com.audiodown.virtual.other").unwrap();
+    let network = PluginId::parse("com.audiodown.virtual.network").unwrap();
+    let labels = [
+        runtime_labels(&plugin, "plugin"),
+        runtime_labels(&gateway, "gateway"),
+        runtime_labels(&network, "network"),
+    ];
+
+    let discovered = discover_runtime_plugin_ids("installation-test", labels.iter()).unwrap();
+    assert_eq!(discovered.len(), 3);
+    assert!(discovered.contains(&plugin));
+    assert!(discovered.contains(&gateway));
+    assert!(discovered.contains(&network));
+
+    let error = reconcile_cleanup_results([Ok(()), Err(()), Ok(()), Err(())]).unwrap_err();
+    assert!(error.to_string().contains('2'));
+}
+
+fn runtime_labels(
+    plugin_id: &PluginId,
+    resource: &str,
+) -> std::collections::HashMap<String, String> {
+    std::collections::HashMap::from([
+        ("io.audiodown.managed".to_string(), "true".to_string()),
+        (
+            "io.audiodown.installation".to_string(),
+            "installation-test".to_string(),
+        ),
+        ("io.audiodown.plugin-id".to_string(), plugin_id.to_string()),
+        ("io.audiodown.resource".to_string(), resource.to_string()),
+    ])
 }
 
 fn installed_plugin(plugin_id: PluginId) -> InstalledPlugin {

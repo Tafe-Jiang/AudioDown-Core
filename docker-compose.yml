@@ -48,6 +48,9 @@ services:
     image: audiodown/supervisor:1.0.0-alpha.1
     container_name: audiodown-supervisor
     restart: unless-stopped
+    depends_on:
+      plugin-gateway-image:
+        condition: service_completed_successfully
     environment:
       AUDIODOWN_SUPERVISOR_IMAGE: "audiodown/supervisor:1.0.0-alpha.1"
       AUDIODOWN_PLUGIN_GATEWAY_IMAGE: "audiodown/plugin-gateway:1.0.0-alpha.1"
@@ -58,12 +61,11 @@ services:
       - audiodown-control:/run/audiodown
 
   plugin-gateway-image:
-    profiles:
-      - gateway-image
     build:
       context: .
       dockerfile: docker/plugin-gateway.Dockerfile
     image: audiodown/plugin-gateway:1.0.0-alpha.1
+    restart: "no"
     network_mode: none
     read_only: true
     cap_drop:

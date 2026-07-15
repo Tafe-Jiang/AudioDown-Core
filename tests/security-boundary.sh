@@ -8,6 +8,8 @@ export AUDIODOWN_DEV_TOKEN="${AUDIODOWN_DEV_TOKEN:-virtual-fixture-dev-token}"
 owns_data_dir=0
 other_container=""
 other_network=""
+plugin_only_container=""
+malformed_network=""
 if [ -z "${AUDIODOWN_HOST_DATA_DIR:-}" ]; then
   AUDIODOWN_HOST_DATA_DIR="$(mktemp -d /tmp/audiodown-security-data.XXXXXX)"
   export AUDIODOWN_HOST_DATA_DIR
@@ -28,6 +30,12 @@ cleanup() {
     if [ -n "$other_network" ]; then
       docker network rm "$other_network" >/dev/null 2>&1 || true
     fi
+    if [ -n "$plugin_only_container" ]; then
+      docker rm -f "$plugin_only_container" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$malformed_network" ]; then
+      docker network rm "$malformed_network" >/dev/null 2>&1 || true
+    fi
     docker ps -aq \
       --filter "label=io.audiodown.managed=true" \
       --filter "label=io.audiodown.plugin-id=$plugin_id" \
@@ -46,7 +54,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-docker compose build plugin-gateway-image
+compose_json="$(docker compose config --format json)"
+node -e '
+  const config = JSON.parse(process.argv[1]);
+  const helper = config.services?.["plugin-gateway-image"];
+  if (!helper) throw new Error("default Compose config must include the Gateway image builder");
+  if (!helper.build) throw new Error("Gateway image helper must build repository code");
+  if ((helper.ports ?? []).length !== 0) throw new Error("Gateway image helper must not publish ports");
+  if ((helper.volumes ?? []).length !== 0) throw new Error("Gateway image helper must not mount sensitive data");
+  const dependency = config.services?.supervisor?.depends_on?.["plugin-gateway-image"];
+  if (dependency?.condition !== "service_completed_successfully") {
+    throw new Error("Supervisor must wait for the fixed Gateway image build helper");
+  }
+' "$compose_json"
 docker compose up -d --build
 
 attempt=1
@@ -108,6 +128,10 @@ gateway_network="$(
 [ "$gateway_network" = "$network_name" ] || fail "plugin and Gateway do not share one network"
 network_json="$(docker network inspect "$network_name")"
 expected_proxy_volume="${AUDIODOWN_PROXY_VOLUME:-audiodown-proxy}"
+installation_id="$(
+  docker inspect "$plugin_container" \
+    --format '{{index .Config.Labels "io.audiodown.installation"}}'
+)"
 
 docker inspect "$core_container" "$supervisor_container" "$plugin_container" "$gateway_container" |
   node -e '
@@ -224,9 +248,11 @@ docker inspect "$core_container" "$supervisor_container" "$plugin_container" "$g
         const index = entry.indexOf("=");
         return [entry.slice(0, index), entry.slice(index + 1)];
       }));
-      if (pluginEnv.get("AUDIODOWN_PROXY_URL") !== "http://audiodown-gateway:18081" ||
-          !pluginEnv.get("AUDIODOWN_PROXY_TOKEN")) {
-        fail("plugin must receive only the fixed Gateway URL and runtime proxy token");
+      if (pluginEnv.get("AUDIODOWN_PROXY_URL") !== "http://audiodown-gateway:18081") {
+        fail("plugin must receive the fixed Gateway URL");
+      }
+      if (pluginEnv.has("AUDIODOWN_PROXY_TOKEN")) {
+        fail("plugin proxy token must not persist in Docker Config.Env");
       }
       const gatewayEnv = gateway.Config?.Env ?? [];
       if (gatewayEnv.some((entry) =>
@@ -255,6 +281,17 @@ docker inspect "$core_container" "$supervisor_container" "$plugin_container" "$g
       }
     });
   ' "$network_name" "$expected_proxy_volume" "$network_json"
+
+if docker exec "$plugin_container" sh -c 'test -e /run/audiodown-secrets/proxy-token'; then
+  fail "plugin one-time proxy token file was not removed"
+fi
+if ! docker exec "$plugin_container" sh -c '
+  for environment in /proc/[0-9]*/environ; do
+    tr "\0" "\n" <"$environment" 2>/dev/null || true
+  done | grep -q "^AUDIODOWN_PROXY_TOKEN=."
+'; then
+  fail "plugin process did not receive the runtime proxy token"
+fi
 
 if docker exec "$plugin_container" sh -c 'test -r /data/audiodown.db'; then
   fail "virtual plugin can read the Core SQLite database"
@@ -398,6 +435,64 @@ while [ "$attempt" -le 60 ]; do
   fi
   if [ "$attempt" -eq 60 ]; then
     fail "Supervisor startup reconcile did not remove stale runtime resources"
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+
+plugin_only_id="com.audiodown.virtual.orphan"
+plugin_only_container="$(
+  docker run -d \
+    --network none \
+    --label io.audiodown.managed=true \
+    --label "io.audiodown.installation=$installation_id" \
+    --label "io.audiodown.plugin-id=$plugin_only_id" \
+    --label io.audiodown.resource=plugin \
+    --entrypoint node \
+    "$plugin_image" \
+    -e 'setInterval(() => {}, 1000)'
+)"
+malformed_network="$network_name"
+docker network create \
+  --attachable \
+  --label io.audiodown.managed=true \
+  --label "io.audiodown.installation=$installation_id" \
+  --label "io.audiodown.plugin-id=$plugin_id" \
+  --label io.audiodown.resource=network \
+  "$malformed_network" >/dev/null
+docker network connect "$malformed_network" "$other_container"
+docker restart "$supervisor_container" >/dev/null
+
+attempt=1
+while [ "$attempt" -le 30 ]; do
+  if ! docker inspect "$plugin_only_container" >/dev/null 2>&1; then
+    plugin_only_container=""
+    break
+  fi
+  if [ "$attempt" -eq 30 ]; then
+    fail "startup reconcile stopped after one owned resource cleanup failure"
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+
+docker network disconnect "$malformed_network" "$other_container"
+attempt=1
+while [ "$attempt" -le 60 ]; do
+  system_json="$(curl --silent http://127.0.0.1:18080/api/v1/system || true)"
+  if node -e '
+    try {
+      const system = JSON.parse(process.argv[1]);
+      process.exit(system.supervisor?.available === true ? 0 : 1);
+    } catch {
+      process.exit(1);
+    }
+  ' "$system_json" && ! docker network inspect "$malformed_network" >/dev/null 2>&1; then
+    malformed_network=""
+    break
+  fi
+  if [ "$attempt" -eq 60 ]; then
+    fail "Supervisor did not aggregate, retry, and remove the unhealthy owned network"
   fi
   attempt=$((attempt + 1))
   sleep 1

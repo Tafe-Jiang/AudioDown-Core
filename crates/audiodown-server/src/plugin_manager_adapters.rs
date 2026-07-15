@@ -301,6 +301,7 @@ pub struct SupervisorPluginRuntime {
     client: std::sync::Arc<dyn SupervisorClient>,
     proxy_tokens: Option<std::sync::Arc<ProxyTokenRegistry>>,
     generations: Mutex<HashMap<PluginId, RuntimeGeneration>>,
+    lifecycle_locks: Mutex<HashMap<PluginId, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl SupervisorPluginRuntime {
@@ -309,6 +310,7 @@ impl SupervisorPluginRuntime {
             client,
             proxy_tokens: None,
             generations: Mutex::new(HashMap::new()),
+            lifecycle_locks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -320,7 +322,21 @@ impl SupervisorPluginRuntime {
             client,
             proxy_tokens: Some(proxy_tokens),
             generations: Mutex::new(HashMap::new()),
+            lifecycle_locks: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn lifecycle_lock(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<std::sync::Arc<tokio::sync::Mutex<()>>, PluginManagerError> {
+        Ok(self
+            .lifecycle_locks
+            .lock()
+            .map_err(|_| PluginManagerError::RuntimeUnavailable)?
+            .entry(plugin_id.clone())
+            .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+            .clone())
     }
 
     fn remember_generation(
@@ -372,6 +388,8 @@ impl SupervisorPluginRuntime {
 #[async_trait]
 impl PluginRuntimeControl for SupervisorPluginRuntime {
     async fn start(&self, plugin_id: &PluginId) -> Result<PluginRuntimeState, PluginManagerError> {
+        let lifecycle_lock = self.lifecycle_lock(plugin_id)?;
+        let _guard = lifecycle_lock.lock().await;
         let Some(proxy_tokens) = &self.proxy_tokens else {
             return self
                 .client
@@ -379,6 +397,13 @@ impl PluginRuntimeControl for SupervisorPluginRuntime {
                 .await
                 .map_err(runtime_error);
         };
+        if self.has_generation(plugin_id) {
+            self.client
+                .confirm_plugin_stopped(plugin_id)
+                .await
+                .map_err(runtime_error)?;
+            self.revoke_generation(plugin_id);
+        }
         let registered = proxy_tokens
             .register(plugin_id.clone())
             .map_err(|_| PluginManagerError::RuntimeUnavailable)?;
@@ -398,18 +423,24 @@ impl PluginRuntimeControl for SupervisorPluginRuntime {
         {
             Ok(state) => Ok(state),
             Err(error) => {
-                self.revoke_if_current(plugin_id, generation);
+                if self.client.confirm_plugin_stopped(plugin_id).await.is_ok() {
+                    self.revoke_if_current(plugin_id, generation);
+                }
                 Err(runtime_error(error))
             }
         }
     }
 
     async fn stop(&self, plugin_id: &PluginId) -> Result<PluginRuntimeState, PluginManagerError> {
-        self.revoke_generation(plugin_id);
-        self.client
+        let lifecycle_lock = self.lifecycle_lock(plugin_id)?;
+        let _guard = lifecycle_lock.lock().await;
+        let state = self
+            .client
             .stop_plugin(plugin_id)
             .await
-            .map_err(runtime_error)
+            .map_err(runtime_error)?;
+        self.revoke_generation(plugin_id);
+        Ok(state)
     }
 
     async fn inspect(
@@ -450,11 +481,15 @@ impl PluginRuntimeControl for SupervisorPluginRuntime {
     }
 
     async fn remove(&self, plugin_id: &PluginId) -> Result<PluginRemoveResult, PluginManagerError> {
-        self.revoke_generation(plugin_id);
-        self.client
+        let lifecycle_lock = self.lifecycle_lock(plugin_id)?;
+        let _guard = lifecycle_lock.lock().await;
+        let removed = self
+            .client
             .remove_plugin(plugin_id)
             .await
-            .map_err(runtime_error)
+            .map_err(runtime_error)?;
+        self.revoke_generation(plugin_id);
+        Ok(removed)
     }
 
     async fn begin_install(

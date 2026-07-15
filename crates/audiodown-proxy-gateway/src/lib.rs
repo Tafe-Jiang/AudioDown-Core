@@ -13,6 +13,7 @@ use axum::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, UnixStream},
+    sync::Semaphore,
     time::timeout,
 };
 
@@ -22,9 +23,28 @@ pub const MAX_PROXY_FRAME_BYTES: usize = 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_BUFFER_BYTES: usize = 16 * 1024;
 
+#[derive(Debug, Clone, Copy)]
+pub struct GatewayLimits {
+    pub body_timeout: Duration,
+    pub server_timeout: Duration,
+    pub max_concurrency: usize,
+}
+
+impl Default for GatewayLimits {
+    fn default() -> Self {
+        Self {
+            body_timeout: Duration::from_secs(5),
+            server_timeout: Duration::from_secs(12),
+            max_concurrency: 64,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct GatewayState {
     backend_socket: Arc<PathBuf>,
+    limits: GatewayLimits,
+    concurrency: Arc<Semaphore>,
 }
 
 pub async fn run() -> Result<(), GatewayError> {
@@ -35,8 +55,24 @@ pub async fn run() -> Result<(), GatewayError> {
 }
 
 pub async fn serve(listener: TcpListener, backend_socket: PathBuf) -> Result<(), GatewayError> {
+    serve_with_limits(listener, backend_socket, GatewayLimits::default()).await
+}
+
+pub async fn serve_with_limits(
+    listener: TcpListener,
+    backend_socket: PathBuf,
+    limits: GatewayLimits,
+) -> Result<(), GatewayError> {
+    if limits.body_timeout.is_zero()
+        || limits.server_timeout.is_zero()
+        || limits.max_concurrency == 0
+    {
+        return Err(GatewayError::InvalidLimits);
+    }
     let state = GatewayState {
         backend_socket: Arc::new(backend_socket),
+        limits,
+        concurrency: Arc::new(Semaphore::new(limits.max_concurrency)),
     };
     let router = Router::new().route("/", post(relay)).with_state(state);
     axum::serve(listener, router)
@@ -50,6 +86,37 @@ async fn relay(
     headers: HeaderMap,
     body: Body,
 ) -> Response<Body> {
+    let _permit = match state.concurrency.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return safe_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "GATEWAY_BUSY",
+                "Gateway concurrency limit was reached",
+            )
+        }
+    };
+    match timeout(
+        state.limits.server_timeout,
+        relay_request(state.clone(), uri, headers, body),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(_) => safe_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "GATEWAY_TIMEOUT",
+            "Gateway request timed out",
+        ),
+    }
+}
+
+async fn relay_request(
+    state: GatewayState,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Body,
+) -> Response<Body> {
     if uri.path() != "/" || uri.query().is_some() || !is_json_content_type(&headers) {
         return safe_error(
             StatusCode::BAD_REQUEST,
@@ -57,8 +124,20 @@ async fn relay(
             "Gateway request was invalid",
         );
     }
-    let frame = match to_bytes(body, MAX_PROXY_FRAME_BYTES + 1).await {
-        Ok(frame) if frame.len() <= MAX_PROXY_FRAME_BYTES => frame,
+    let frame = match timeout(
+        state.limits.body_timeout,
+        to_bytes(body, MAX_PROXY_FRAME_BYTES + 1),
+    )
+    .await
+    {
+        Ok(Ok(frame)) if frame.len() <= MAX_PROXY_FRAME_BYTES => frame,
+        Err(_) => {
+            return safe_error(
+                StatusCode::REQUEST_TIMEOUT,
+                "REQUEST_TIMEOUT",
+                "Gateway request body timed out",
+            )
+        }
         _ => {
             return safe_error(
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -142,7 +221,11 @@ async fn read_frame(stream: &mut UnixStream) -> Result<Vec<u8>, RelayError> {
             {
                 return Err(RelayError::InvalidResponse);
             }
-            return Ok(frame);
+            let mut trailing = [0_u8; 1];
+            return match stream.read(&mut trailing).await {
+                Ok(0) => Ok(frame),
+                Ok(_) | Err(_) => Err(RelayError::InvalidResponse),
+            };
         }
         let remaining = MAX_PROXY_FRAME_BYTES
             .saturating_add(1)
@@ -193,6 +276,8 @@ enum RelayError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum GatewayError {
+    #[error("fixed Gateway limits were invalid")]
+    InvalidLimits,
     #[error("fixed Gateway listener could not bind")]
     Bind,
     #[error("fixed Gateway server failed")]

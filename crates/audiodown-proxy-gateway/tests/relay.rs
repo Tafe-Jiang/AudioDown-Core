@@ -1,6 +1,6 @@
 use std::{future::Future, net::SocketAddr, path::PathBuf};
 
-use audiodown_proxy_gateway::{serve, MAX_PROXY_FRAME_BYTES};
+use audiodown_proxy_gateway::{serve_with_limits, GatewayLimits, MAX_PROXY_FRAME_BYTES};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream, UnixListener},
@@ -72,6 +72,92 @@ async fn rejects_invalid_backend_frames_with_a_safe_standard_error() {
     fixture.shutdown();
 }
 
+#[tokio::test]
+async fn rejects_slow_http_bodies_and_times_out_the_whole_request() {
+    let fixture = RelayFixture::start_with_limits(GatewayLimits {
+        body_timeout: std::time::Duration::from_millis(40),
+        server_timeout: std::time::Duration::from_millis(120),
+        max_concurrency: 4,
+    })
+    .await;
+
+    let mut stream = TcpStream::connect(fixture.address).await.unwrap();
+    stream
+        .write_all(
+            b"POST / HTTP/1.1\r\nHost: gateway\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{",
+        )
+        .await
+        .unwrap();
+    let response = read_http_response(stream).await;
+    assert_eq!(response.status, 408);
+
+    let backend = fixture.spawn_backend(|_| async {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        br#"{"status":200,"headers":{},"bodyBase64":null,"error":null}"#.to_vec()
+    });
+    let response = post_json(fixture.address, b"{}").await;
+    assert_eq!(response.status, 504);
+    backend.await.unwrap();
+    fixture.shutdown();
+}
+
+#[tokio::test]
+async fn rejects_requests_beyond_the_concurrency_limit() {
+    let fixture = RelayFixture::start_with_limits(GatewayLimits {
+        body_timeout: std::time::Duration::from_secs(1),
+        server_timeout: std::time::Duration::from_secs(1),
+        max_concurrency: 1,
+    })
+    .await;
+    let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let entered_backend = entered.clone();
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release_backend = release.clone();
+    let backend = fixture.spawn_backend(move |_| async move {
+        entered_backend.notify_one();
+        release_backend.notified().await;
+        br#"{"status":200,"headers":{},"bodyBase64":null,"error":null}"#.to_vec()
+    });
+    let address = fixture.address;
+    let first = tokio::spawn(async move { post_json(address, b"{}").await });
+    entered.notified().await;
+
+    let rejected = post_json(fixture.address, b"{}").await;
+    assert_eq!(rejected.status, 503);
+    release.notify_one();
+    assert_eq!(first.await.unwrap().status, 200);
+    backend.await.unwrap();
+    fixture.shutdown();
+}
+
+#[tokio::test]
+async fn rejects_delayed_bytes_after_the_backend_newline() {
+    let fixture = RelayFixture::start().await;
+    let path = fixture.backend_socket.clone();
+    let backend = tokio::spawn(async move {
+        let listener = UnixListener::bind(path).unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+        let mut framed = Vec::new();
+        BufReader::new(reader)
+            .read_until(b'\n', &mut framed)
+            .await
+            .unwrap();
+        writer
+            .write_all(b"{\"status\":200,\"headers\":{},\"bodyBase64\":null,\"error\":null}\n")
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        writer.write_all(b"{\"trailing\":true}").await.unwrap();
+        writer.shutdown().await.unwrap();
+    });
+
+    let response = post_json(fixture.address, b"{}").await;
+    assert_eq!(response.status, 502);
+    backend.await.unwrap();
+    fixture.shutdown();
+}
+
 fn json_frame_of_size(size: usize) -> Vec<u8> {
     const PREFIX: &[u8] = b"{\"padding\":\"";
     const SUFFIX: &[u8] = b"\"}";
@@ -105,11 +191,15 @@ struct RelayFixture {
 
 impl RelayFixture {
     async fn start() -> Self {
+        Self::start_with_limits(GatewayLimits::default()).await
+    }
+
+    async fn start_with_limits(limits: GatewayLimits) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let backend_socket = directory.path().join("core.sock");
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(serve(listener, backend_socket.clone()));
+        let server = tokio::spawn(serve_with_limits(listener, backend_socket.clone(), limits));
         Self {
             _directory: directory,
             backend_socket,
@@ -135,9 +225,13 @@ impl RelayFixture {
                 .unwrap();
             assert_eq!(framed.pop(), Some(b'\n'));
             let response = response(framed).await;
-            writer.write_all(&response).await.unwrap();
-            writer.write_all(b"\n").await.unwrap();
-            writer.shutdown().await.unwrap();
+            if writer.write_all(&response).await.is_err() {
+                return;
+            }
+            if writer.write_all(b"\n").await.is_err() {
+                return;
+            }
+            let _ = writer.shutdown().await;
         })
     }
 
@@ -167,6 +261,10 @@ async fn post_json(address: SocketAddr, body: &[u8]) -> HttpResponse {
                 )
         );
     }
+    read_http_response(stream).await
+}
+
+async fn read_http_response(mut stream: TcpStream) -> HttpResponse {
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
     let separator = response

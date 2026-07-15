@@ -1,10 +1,33 @@
 use audiodown_domain::plugin::PluginId;
 use audiodown_supervisor::protocol::{OperationStoreError, ProtocolOperationStore};
+use audiodown_supervisor::server::PluginLifecycleLocks;
 use audiodown_supervisor_protocol::{
     PluginInstallOperationState, ProtocolError, SupervisorParams, SupervisorRequest,
 };
 use chrono::{Duration, TimeZone, Utc};
 use uuid::Uuid;
+
+#[tokio::test]
+async fn lifecycle_locks_serialize_only_the_same_plugin() {
+    let locks = PluginLifecycleLocks::default();
+    let plugin_id = PluginId::parse("com.audiodown.virtual.content").unwrap();
+    let other_id = PluginId::parse("com.audiodown.virtual.other").unwrap();
+    let first_lock = locks.for_plugin(&plugin_id).unwrap();
+    let _first = first_lock.lock().await;
+
+    let same_lock = locks.for_plugin(&plugin_id).unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(25), same_lock.lock())
+            .await
+            .is_err()
+    );
+    let other_lock = locks.for_plugin(&other_id).unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(25), other_lock.lock())
+            .await
+            .is_ok()
+    );
+}
 
 #[test]
 fn trusted_start_request_accepts_only_plugin_id_and_proxy_token() {

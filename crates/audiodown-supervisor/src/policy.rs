@@ -280,7 +280,11 @@ impl PluginContainerPolicy {
             command: vec!["node".to_string(), installed.runtime_path],
             labels,
             read_only: true,
-            tmpfs: vec!["/tmp:rw,noexec,nosuid,nodev,size=67108864".to_string()],
+            tmpfs: vec![
+                "/tmp:rw,noexec,nosuid,nodev,size=67108864".to_string(),
+                "/run/audiodown-secrets:rw,noexec,nosuid,nodev,size=4096,mode=0700,uid=10002,gid=10002"
+                    .to_string(),
+            ],
             mounts: Vec::new(),
             public_ports: Vec::new(),
             privileged: false,

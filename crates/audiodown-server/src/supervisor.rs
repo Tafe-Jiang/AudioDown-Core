@@ -25,6 +25,7 @@ use tokio::{
 use uuid::Uuid;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
+const LIFECYCLE_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 const PLUGIN_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 pub const PLUGIN_INSTALL_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -48,6 +49,12 @@ pub trait SupervisorClient: Send + Sync {
         &self,
         plugin_id: &PluginId,
     ) -> Result<PluginRuntimeState, SupervisorError>;
+    async fn confirm_plugin_stopped(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<PluginRuntimeState, SupervisorError> {
+        self.stop_plugin(plugin_id).await
+    }
     async fn inspect_plugin(
         &self,
         plugin_id: &PluginId,
@@ -244,6 +251,18 @@ impl SupervisorClient for UnixSupervisorClient {
     ) -> Result<PluginRuntimeState, SupervisorError> {
         self.call(SupervisorMethod::PluginStop, Some(plugin_params(plugin_id)))
             .await
+    }
+
+    async fn confirm_plugin_stopped(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<PluginRuntimeState, SupervisorError> {
+        self.call_with_timeout(
+            LIFECYCLE_CLEANUP_TIMEOUT,
+            SupervisorMethod::PluginStop,
+            Some(plugin_params(plugin_id)),
+        )
+        .await
     }
 
     async fn inspect_plugin(

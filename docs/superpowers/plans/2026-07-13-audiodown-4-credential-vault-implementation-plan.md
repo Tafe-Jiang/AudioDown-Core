@@ -799,7 +799,7 @@ file before exporting the token only to the plugin process. This preserves the
 design requirement that the plugin process receives the token while preventing
 `docker inspect` from disclosing it.
 
-- [ ] **Step 6: Write failing review-repair tests and confirm failure**
+- [x] **Step 6: Write failing review-repair tests and confirm failure**
 
 Cover serialized plugin lifecycle operations and ambiguous Core timeouts;
 Gateway body/server timeouts, concurrency limits, and delayed trailing bytes;
@@ -807,14 +807,14 @@ ownership-only cleanup discovery; startup reconciliation across plugin,
 Gateway, and network remnants with aggregated errors; tmpfs token bootstrap;
 and a clean default `docker compose up -d --build` Gateway image build.
 
-- [ ] **Step 7: Implement the minimum review repairs**
+- [x] **Step 7: Implement the minimum review repairs**
 
 Keep token generations valid until container cleanup is confirmed, make cleanup
 continue across independent remnants, remove proxy tokens from Docker metadata,
 and ensure the default Compose path builds the fixed Gateway image without
 exposing ports or sensitive mounts.
 
-- [ ] **Step 8: Run the full Task 13 verification matrix**
+- [x] **Step 8: Run the full Task 13 verification matrix**
 
 Run Gateway, protocol, Server, and Supervisor tests and Clippy; workspace check;
 format and diff checks; Compose config; the security-boundary script; and a
@@ -824,6 +824,9 @@ clean-image default Compose build/start verification.
 
 Commit with `阶段4：修复插件代理隔离审查问题`, generate a fresh review package,
 and keep Task 14 blocked until the second review returns `Approved`.
+
+- [x] Repair commit completed by this change.
+- [ ] Independent re-review remains pending controller dispatch and approval.
 
 ### Task 14: Invoke Credential Plugins through the Supervisor
 

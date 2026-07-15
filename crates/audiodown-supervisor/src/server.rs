@@ -1,10 +1,11 @@
 use std::{
     collections::HashMap,
     path::Path,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
+use audiodown_domain::plugin::PluginId;
 use audiodown_domain::plugin::PluginStatus;
 use audiodown_supervisor_protocol::SupervisorParams;
 use chrono::Utc;
@@ -25,6 +26,23 @@ use crate::{
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_CLOCK_SKEW_SECONDS: i64 = 30;
 const NONCE_RETENTION: Duration = Duration::from_secs(120);
+
+#[derive(Default)]
+pub struct PluginLifecycleLocks {
+    locks: Mutex<HashMap<PluginId, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+impl PluginLifecycleLocks {
+    pub fn for_plugin(&self, plugin_id: &PluginId) -> anyhow::Result<Arc<tokio::sync::Mutex<()>>> {
+        Ok(self
+            .locks
+            .lock()
+            .map_err(|_| anyhow::anyhow!("plugin lifecycle lock is unavailable"))?
+            .entry(plugin_id.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone())
+    }
+}
 
 pub async fn run(
     config: Config,
@@ -53,6 +71,7 @@ pub async fn run(
         plugin_data: config.plugin_data,
         installation_id: identity.installation_id,
         operations,
+        lifecycle_locks: PluginLifecycleLocks::default(),
     });
 
     loop {
@@ -132,6 +151,17 @@ async fn dispatch(
         SupervisorMethod::PluginStart => {
             let params = start_params(request.params);
             let plugin_id = params.plugin_id;
+            let lifecycle_lock = match runtime.lifecycle_locks.for_plugin(&plugin_id) {
+                Ok(lock) => lock,
+                Err(error) => {
+                    return SupervisorResponse::failure(
+                        request.id,
+                        "DOCKER_OPERATION_FAILED",
+                        error.to_string(),
+                    )
+                }
+            };
+            let _guard = lifecycle_lock.lock().await;
             let install = match install_record::load(
                 &runtime.plugin_data,
                 &runtime.installation_id,
@@ -171,6 +201,17 @@ async fn dispatch(
         }
         SupervisorMethod::PluginStop => {
             let plugin_id = plugin_params(request.params).plugin_id;
+            let lifecycle_lock = match runtime.lifecycle_locks.for_plugin(&plugin_id) {
+                Ok(lock) => lock,
+                Err(error) => {
+                    return SupervisorResponse::failure(
+                        request.id,
+                        "DOCKER_OPERATION_FAILED",
+                        error.to_string(),
+                    )
+                }
+            };
+            let _guard = lifecycle_lock.lock().await;
             match runtime.docker.stop_plugin(&plugin_id).await {
                 Ok(container_id) => SupervisorResponse::success(
                     request.id,
@@ -273,6 +314,17 @@ async fn dispatch(
         }
         SupervisorMethod::PluginRemove => {
             let plugin_id = plugin_params(request.params).plugin_id;
+            let lifecycle_lock = match runtime.lifecycle_locks.for_plugin(&plugin_id) {
+                Ok(lock) => lock,
+                Err(error) => {
+                    return SupervisorResponse::failure(
+                        request.id,
+                        "DOCKER_OPERATION_FAILED",
+                        error.to_string(),
+                    )
+                }
+            };
+            let _guard = lifecycle_lock.lock().await;
             let install = match install_record::load(
                 &runtime.plugin_data,
                 &runtime.installation_id,
@@ -392,6 +444,7 @@ struct Runtime {
     plugin_data: std::path::PathBuf,
     installation_id: String,
     operations: InstallOperationManager<DockerBuildAdapter>,
+    lifecycle_locks: PluginLifecycleLocks,
 }
 
 async fn read_request(stream: &mut UnixStream) -> anyhow::Result<Vec<u8>> {
