@@ -787,6 +787,44 @@ git commit -m "阶段4：隔离插件代理运行通道" \
   -m "使用每插件内部网络和固定 Gateway 隔离代理访问。"
 ```
 
+**Review status (2026-07-15):** Initial implementation commit `16ce6bf` is
+complete, but independent review returned `Needs fixes`. Task 13 remains in
+progress and must not be counted as accepted until the repair checks below pass
+and a second independent review returns `Approved`.
+
+Security correction: do not persist the runtime proxy token in Docker
+`Config.Env`. Supervisor must deliver it through a container-local tmpfs secret
+file to a fixed repository-owned wrapper. The wrapper reads and removes the
+file before exporting the token only to the plugin process. This preserves the
+design requirement that the plugin process receives the token while preventing
+`docker inspect` from disclosing it.
+
+- [ ] **Step 6: Write failing review-repair tests and confirm failure**
+
+Cover serialized plugin lifecycle operations and ambiguous Core timeouts;
+Gateway body/server timeouts, concurrency limits, and delayed trailing bytes;
+ownership-only cleanup discovery; startup reconciliation across plugin,
+Gateway, and network remnants with aggregated errors; tmpfs token bootstrap;
+and a clean default `docker compose up -d --build` Gateway image build.
+
+- [ ] **Step 7: Implement the minimum review repairs**
+
+Keep token generations valid until container cleanup is confirmed, make cleanup
+continue across independent remnants, remove proxy tokens from Docker metadata,
+and ensure the default Compose path builds the fixed Gateway image without
+exposing ports or sensitive mounts.
+
+- [ ] **Step 8: Run the full Task 13 verification matrix**
+
+Run Gateway, protocol, Server, and Supervisor tests and Clippy; workspace check;
+format and diff checks; Compose config; the security-boundary script; and a
+clean-image default Compose build/start verification.
+
+- [ ] **Step 9: Commit repairs and obtain independent approval**
+
+Commit with `阶段4：修复插件代理隔离审查问题`, generate a fresh review package,
+and keep Task 14 blocked until the second review returns `Approved`.
+
 ### Task 14: Invoke Credential Plugins through the Supervisor
 
 **Files:**
