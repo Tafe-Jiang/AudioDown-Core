@@ -696,7 +696,7 @@ git commit -m "阶段4：修复代理后端安全审查问题" \
   -m "封堵秘密反射、协议缺字段、并发更新和缓存倒退风险。"
 ```
 
-- [ ] **Step 10: Obtain an independent clean review**
+- [x] **Step 10: Obtain an independent clean review**
 
 Regenerate the Task 12 review package from the last accepted Task 11 progress
 commit through the repair commit. Task 12 remains incomplete until an
@@ -713,7 +713,7 @@ final frame fallback.
 - [x] Re-run the focused gateway test, full server suite, Clippy, workspace check,
   formatting, and diff checks.
 - [x] Commit with `阶段4：修正代理响应帧预算`.
-- [ ] Regenerate the package and obtain a clean independent re-review.
+- [x] Regenerate the package and obtain a clean independent re-review.
 
 ### Task 13: Isolate Plugins Behind the Fixed Gateway
 
