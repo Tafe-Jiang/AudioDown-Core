@@ -38,8 +38,26 @@ const HANDSHAKE_ATTEMPTS: usize = 40;
 const HANDSHAKE_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_PLUGIN_RPC_BYTES: usize = 1024 * 1024;
 pub const PLUGIN_RPC_TIMEOUT: Duration = Duration::from_secs(8);
-pub const PLUGIN_BOOTSTRAP_PATH: &str = "/usr/local/bin/audiodown-plugin-bootstrap";
 pub const PROXY_TOKEN_SECRET_DIR: &str = "/run/audiodown-secrets";
+const PROXY_TOKEN_SECRET_PATH: &str = "/run/audiodown-secrets/proxy-token";
+const PROXY_TOKEN_TEMPORARY_PATH: &str = "/run/audiodown-secrets/.proxy-token.tmp";
+const PLUGIN_BOOTSTRAP_SCRIPT: &str = r#"set -eu
+secret_file=/run/audiodown-secrets/proxy-token
+attempt=0
+while [ ! -f "$secret_file" ]; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 200 ]; then
+    echo 'Plugin proxy token was not delivered' >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+AUDIODOWN_PROXY_TOKEN="$(cat "$secret_file")"
+rm -f "$secret_file"
+[ -n "$AUDIODOWN_PROXY_TOKEN" ] || exit 1
+export AUDIODOWN_PROXY_TOKEN
+unset secret_file attempt
+exec "$@""#;
 
 pub struct DockerAdapter {
     docker: Docker,
@@ -713,7 +731,11 @@ impl DockerAdapter {
         proxy_token: &ProxyToken,
     ) -> Result<(), DockerAdapterError> {
         let token = proxy_token.expose_secret(|value| value.as_bytes().to_vec());
-        let token_len = token.len().to_string();
+        let command = proxy_token_publish_command(
+            token.len(),
+            Path::new(PROXY_TOKEN_TEMPORARY_PATH),
+            Path::new(PROXY_TOKEN_SECRET_PATH),
+        );
         let exec = self
             .docker
             .create_exec(
@@ -722,14 +744,7 @@ impl DockerAdapter {
                     attach_stdin: Some(true),
                     attach_stdout: Some(true),
                     attach_stderr: Some(true),
-                    cmd: Some(vec![
-                        "sh".to_string(),
-                        "-c".to_string(),
-                        "umask 077; head -c \"$1\" > /run/audiodown-secrets/proxy-token"
-                            .to_string(),
-                        "audiodown-secret-bootstrap".to_string(),
-                        token_len,
-                    ]),
+                    cmd: Some(command),
                     user: Some("10002:10002".to_string()),
                     working_dir: Some(PROXY_TOKEN_SECRET_DIR.to_string()),
                     ..Default::default()
@@ -848,6 +863,38 @@ impl DockerAdapter {
     }
 }
 
+#[doc(hidden)]
+pub fn proxy_token_publish_command(
+    token_len: usize,
+    temporary_path: &Path,
+    final_path: &Path,
+) -> Vec<String> {
+    vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        r#"set -eu
+expected=$1
+temporary=$2
+final=$3
+cleanup() { rm -f "$temporary"; }
+trap cleanup 0
+trap 'exit 1' 1 2 15
+umask 077
+rm -f "$temporary" "$final"
+head -c "$expected" > "$temporary"
+actual=$(wc -c < "$temporary")
+[ "$actual" -eq "$expected" ]
+chmod 600 "$temporary"
+mv "$temporary" "$final"
+trap - 0 1 2 15"#
+            .to_string(),
+        "audiodown-secret-publish".to_string(),
+        token_len.to_string(),
+        temporary_path.to_string_lossy().into_owned(),
+        final_path.to_string_lossy().into_owned(),
+    ]
+}
+
 pub fn plugin_container_config(
     policy: &crate::policy::RuntimePluginContainerSpec,
 ) -> ContainerCreateBody {
@@ -855,7 +902,12 @@ pub fn plugin_container_config(
         image: Some(policy.image_id.clone()),
         user: Some("10002:10002".to_string()),
         working_dir: Some("/plugin".to_string()),
-        entrypoint: Some(vec![PLUGIN_BOOTSTRAP_PATH.to_string()]),
+        entrypoint: Some(vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            PLUGIN_BOOTSTRAP_SCRIPT.to_string(),
+            "audiodown-plugin-bootstrap".to_string(),
+        ]),
         cmd: Some(policy.command.clone()),
         env: Some(vec![
             format!("AUDIODOWN_RPC_SOCKET={RPC_SOCKET}"),

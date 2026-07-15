@@ -442,16 +442,6 @@ fn runtime_context(sdk_files: &[(&str, &[u8])]) -> Result<Vec<u8>, DockerBuildEr
             0,
             0,
         )?;
-        append_directory(&mut builder, "docker/", 0, 0)?;
-        append_directory(&mut builder, "docker/plugin-runtime/", 0, 0)?;
-        append_file(
-            &mut builder,
-            "docker/plugin-runtime/plugin-token-bootstrap.sh",
-            include_bytes!("../../../docker/plugin-runtime/plugin-token-bootstrap.sh"),
-            0o555,
-            0,
-            0,
-        )?;
         append_directory(&mut builder, "plugin-sdk/", 0, 0)?;
         append_directory(&mut builder, "plugin-sdk/node/", 0, 0)?;
         append_directory(&mut builder, "plugin-sdk/node/src/", 0, 0)?;

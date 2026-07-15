@@ -240,10 +240,13 @@ name = "audiodown-proxy-gateway"
 version = "1.0.0-alpha.1"
 dependencies = [
  "axum",
+ "hyper",
+ "hyper-util",
  "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
+ "tower",
 ]
 
 [[package]]

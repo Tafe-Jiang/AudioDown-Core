@@ -158,6 +158,57 @@ async fn rejects_delayed_bytes_after_the_backend_newline() {
     fixture.shutdown();
 }
 
+#[tokio::test]
+async fn connection_level_limit_times_out_incomplete_http_headers() {
+    let fixture = RelayFixture::start_with_limits(GatewayLimits {
+        body_timeout: std::time::Duration::from_secs(1),
+        server_timeout: std::time::Duration::from_millis(80),
+        max_concurrency: 2,
+    })
+    .await;
+    let mut stream = TcpStream::connect(fixture.address).await.unwrap();
+    stream
+        .write_all(b"POST / HTTP/1.1\r\nHost: gateway\r\nContent-Type:")
+        .await
+        .unwrap();
+
+    let mut byte = [0_u8; 1];
+    let read = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        stream.read(&mut byte),
+    )
+    .await
+    .expect("incomplete headers must hit a connection-level deadline")
+    .unwrap_or(0);
+    assert_eq!(read, 0);
+    fixture.shutdown();
+}
+
+#[tokio::test]
+async fn connection_level_limit_rejects_saturation_before_headers_complete() {
+    let fixture = RelayFixture::start_with_limits(GatewayLimits {
+        body_timeout: std::time::Duration::from_secs(1),
+        server_timeout: std::time::Duration::from_secs(1),
+        max_concurrency: 1,
+    })
+    .await;
+    let mut occupying = TcpStream::connect(fixture.address).await.unwrap();
+    occupying
+        .write_all(b"POST / HTTP/1.1\r\nHost: gateway\r\nContent-Type:")
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+    let response = raw_http_exchange(
+        fixture.address,
+        b"POST / HTTP/1.1\r\nHost: gateway\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+    )
+    .await;
+    assert!(response.starts_with(b"HTTP/1.1 503 "));
+    drop(occupying);
+    fixture.shutdown();
+}
+
 fn json_frame_of_size(size: usize) -> Vec<u8> {
     const PREFIX: &[u8] = b"{\"padding\":\"";
     const SUFFIX: &[u8] = b"\"}";
@@ -281,5 +332,23 @@ async fn read_http_response(mut stream: TcpStream) -> HttpResponse {
     HttpResponse {
         status,
         body: response[separator + 4..].to_vec(),
+    }
+}
+
+async fn raw_http_exchange(address: SocketAddr, request: &[u8]) -> Vec<u8> {
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    if stream.write_all(request).await.is_err() {
+        return Vec::new();
+    }
+    let mut response = Vec::new();
+    match tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        stream.read_to_end(&mut response),
+    )
+    .await
+    {
+        Ok(Ok(_)) => response,
+        Ok(Err(_)) => Vec::new(),
+        Err(_) => response,
     }
 }

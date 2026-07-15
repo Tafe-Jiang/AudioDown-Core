@@ -1,7 +1,7 @@
 use audiodown_domain::plugin::PluginId;
 use audiodown_supervisor::docker::{
     discover_runtime_plugin_ids, network_is_healthy, network_is_owned_for_cleanup,
-    plugin_container_config, reconcile_cleanup_results, PLUGIN_BOOTSTRAP_PATH,
+    plugin_container_config, proxy_token_publish_command, reconcile_cleanup_results,
     PROXY_TOKEN_SECRET_DIR,
 };
 use audiodown_supervisor::policy::{
@@ -153,10 +153,7 @@ fn plugin_container_metadata_excludes_token_and_uses_tmpfs_bootstrap() {
     let config = plugin_container_config(&runtime.plugin);
     let encoded = serde_json::to_string(&config).unwrap();
     assert!(!encoded.contains(token_canary));
-    assert_eq!(
-        config.entrypoint,
-        Some(vec![PLUGIN_BOOTSTRAP_PATH.to_string()])
-    );
+    assert_eq!(config.entrypoint.as_ref().unwrap()[0], "/bin/sh");
     assert!(config
         .env
         .unwrap_or_default()
@@ -168,6 +165,96 @@ fn plugin_container_metadata_excludes_token_and_uses_tmpfs_bootstrap() {
         .tmpfs
         .unwrap()
         .contains_key(PROXY_TOKEN_SECRET_DIR));
+}
+
+#[test]
+fn plugin_container_uses_fixed_inline_bootstrap_for_existing_images() {
+    let token_canary = "inline-bootstrap-token-canary";
+    let runtime = PluginRuntimePolicy::build(
+        installed_plugin(PluginId::parse("com.audiodown.virtual.content").unwrap()),
+        GatewayRuntimeConfig::default(),
+        ProxyToken::new(token_canary).unwrap(),
+    )
+    .unwrap();
+
+    let config = plugin_container_config(&runtime.plugin);
+    let entrypoint = config.entrypoint.unwrap();
+    assert_eq!(&entrypoint[..2], ["/bin/sh", "-c"]);
+    assert_eq!(entrypoint[3], "audiodown-plugin-bootstrap");
+    assert!(entrypoint[2].contains("/run/audiodown-secrets/proxy-token"));
+    assert!(entrypoint[2].contains("rm -f \"$secret_file\""));
+    assert!(entrypoint[2].contains("exec \"$@\""));
+    assert!(!entrypoint.join(" ").contains(token_canary));
+    assert!(!entrypoint
+        .iter()
+        .any(|argument| argument == "/usr/local/bin/audiodown-plugin-bootstrap"));
+}
+
+#[tokio::test]
+async fn proxy_token_publish_is_atomic_under_delayed_chunked_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let final_path = directory.path().join("proxy-token");
+    let temporary_path = directory.path().join(".proxy-token.tmp");
+    let token = b"chunked-runtime-proxy-token";
+    let command = proxy_token_publish_command(token.len(), &temporary_path, &final_path);
+    let mut child = tokio::process::Command::new(&command[0])
+        .args(&command[1..])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+
+    use tokio::io::AsyncWriteExt;
+    input.write_all(&token[..4]).await.unwrap();
+    input.flush().await.unwrap();
+    for _ in 0..50 {
+        if temporary_path.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(temporary_path.exists());
+    assert!(!final_path.exists());
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::fs::metadata(&temporary_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+
+    input.write_all(&token[4..]).await.unwrap();
+    drop(input);
+    assert!(child.wait().await.unwrap().success());
+    assert_eq!(std::fs::read(&final_path).unwrap(), token);
+    assert!(!temporary_path.exists());
+}
+
+#[tokio::test]
+async fn proxy_token_publish_rejects_short_input_and_cleans_temporary_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let final_path = directory.path().join("proxy-token");
+    let temporary_path = directory.path().join(".proxy-token.tmp");
+    let command = proxy_token_publish_command(16, &temporary_path, &final_path);
+    let mut child = tokio::process::Command::new(&command[0])
+        .args(&command[1..])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+
+    use tokio::io::AsyncWriteExt;
+    input.write_all(b"short").await.unwrap();
+    drop(input);
+    assert!(!child.wait().await.unwrap().success());
+    assert!(!final_path.exists());
+    assert!(!temporary_path.exists());
 }
 
 #[test]

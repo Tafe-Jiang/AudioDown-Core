@@ -825,8 +825,42 @@ clean-image default Compose build/start verification.
 Commit with `阶段4：修复插件代理隔离审查问题`, generate a fresh review package,
 and keep Task 14 blocked until the second review returns `Approved`.
 
-- [x] Repair commit completed by this change.
-- [ ] Independent re-review remains pending controller dispatch and approval.
+- [x] First repair commit completed by `8f44eb3`.
+- [x] Re-review after `8f44eb3` completed with `Needs fixes`.
+- [ ] Independent approval remains incomplete.
+
+**Second re-review repair (after `8f44eb3`):** Independent re-review confirmed
+the first findings closed but found non-atomic secret publication, handler-only
+Gateway limits, and a bootstrap compatibility dependency on newly rebuilt
+plugin images.
+
+- [x] **Step 9a: Write and confirm second-round failing regressions**
+
+Cover delayed chunked token delivery and short-write cleanup, incomplete HTTP
+headers and connection-slot saturation, and startup of an attested Node plugin
+image that does not contain a bootstrap executable.
+
+- [x] **Step 9b: Implement the minimum second-round repairs**
+
+Publish the token through a mode-0600 same-tmpfs temporary file with exact
+length validation and atomic rename. Hold bounded permits for complete Gateway
+connections and apply an HTTP/1 header-read deadline before Axum dispatch.
+Supply the fixed token-free bootstrap as Supervisor-owned inline Docker
+entrypoint metadata so existing attested images need no rebuild or migration.
+
+- [x] **Step 9c: Run the complete second-round verification matrix**
+
+Run all Task 13 Rust tests and Clippy, workspace checks, Compose validation,
+real Docker security boundaries, and the clean-image default Compose build,
+start, and cleanup path.
+
+- [ ] **Step 9d: Commit the second repair and obtain independent approval**
+
+Commit with `阶段4：收紧插件代理启动边界` and keep Task 14 blocked until an
+independent controller-dispatched re-review returns `Approved`.
+
+- [x] Second repair commit completed by this change.
+- [ ] Independent approval remains pending controller dispatch.
 
 ### Task 14: Invoke Credential Plugins through the Supervisor
 

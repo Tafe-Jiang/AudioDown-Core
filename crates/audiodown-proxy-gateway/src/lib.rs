@@ -10,12 +10,15 @@ use axum::{
     routing::post,
     Router,
 };
+use hyper::{server::conn::http1, service::service_fn};
+use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, UnixStream},
+    net::{TcpListener, TcpStream, UnixStream},
     sync::Semaphore,
     time::timeout,
 };
+use tower::ServiceExt;
 
 pub const GATEWAY_LISTEN_ADDRESS: &str = "0.0.0.0:18081";
 pub const CORE_BACKEND_SOCKET: &str = "/run/audiodown-proxy/core.sock";
@@ -44,7 +47,6 @@ impl Default for GatewayLimits {
 struct GatewayState {
     backend_socket: Arc<PathBuf>,
     limits: GatewayLimits,
-    concurrency: Arc<Semaphore>,
 }
 
 pub async fn run() -> Result<(), GatewayError> {
@@ -72,12 +74,48 @@ pub async fn serve_with_limits(
     let state = GatewayState {
         backend_socket: Arc::new(backend_socket),
         limits,
-        concurrency: Arc::new(Semaphore::new(limits.max_concurrency)),
     };
     let router = Router::new().route("/", post(relay)).with_state(state);
-    axum::serve(listener, router)
-        .await
-        .map_err(|_| GatewayError::Serve)
+    let concurrency = Arc::new(Semaphore::new(limits.max_concurrency));
+    loop {
+        let (stream, _) = listener.accept().await.map_err(|_| GatewayError::Serve)?;
+        let permit = match concurrency.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                reject_busy_connection(stream).await;
+                continue;
+            }
+        };
+        let router = router.clone();
+        tokio::spawn(async move {
+            let service = service_fn(move |request| {
+                let router = router.clone();
+                async move { router.oneshot(request.map(Body::new)).await }
+            });
+            let mut builder = http1::Builder::new();
+            builder
+                .timer(TokioTimer::new())
+                .header_read_timeout(limits.server_timeout);
+            let _permit = permit;
+            let _ = builder
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        });
+    }
+}
+
+async fn reject_busy_connection(mut stream: TcpStream) {
+    let mut request = [0_u8; 4096];
+    let _ = timeout(Duration::from_millis(10), stream.read(&mut request)).await;
+    while stream.try_read(&mut request).is_ok_and(|read| read > 0) {}
+    const BODY: &[u8] = br#"{"status":503,"headers":{},"bodyBase64":null,"error":{"code":"GATEWAY_BUSY","summary":"Gateway concurrency limit was reached"}}"#;
+    let head = format!(
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        BODY.len()
+    );
+    let _ = stream.write_all(head.as_bytes()).await;
+    let _ = stream.write_all(BODY).await;
+    let _ = stream.shutdown().await;
 }
 
 async fn relay(
@@ -86,16 +124,6 @@ async fn relay(
     headers: HeaderMap,
     body: Body,
 ) -> Response<Body> {
-    let _permit = match state.concurrency.clone().try_acquire_owned() {
-        Ok(permit) => permit,
-        Err(_) => {
-            return safe_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "GATEWAY_BUSY",
-                "Gateway concurrency limit was reached",
-            )
-        }
-    };
     match timeout(
         state.limits.server_timeout,
         relay_request(state.clone(), uri, headers, body),

@@ -282,8 +282,14 @@ docker inspect "$core_container" "$supervisor_container" "$plugin_container" "$g
     });
   ' "$network_name" "$expected_proxy_volume" "$network_json"
 
-if docker exec "$plugin_container" sh -c 'test -e /run/audiodown-secrets/proxy-token'; then
-  fail "plugin one-time proxy token file was not removed"
+if docker exec "$plugin_container" sh -c 'test -e /usr/local/bin/audiodown-plugin-bootstrap'; then
+  fail "plugin startup must not depend on a bootstrap file in the attested image"
+fi
+if docker exec "$plugin_container" sh -c '
+  test -e /run/audiodown-secrets/proxy-token ||
+    test -e /run/audiodown-secrets/.proxy-token.tmp
+'; then
+  fail "plugin one-time proxy token files were not removed"
 fi
 if ! docker exec "$plugin_container" sh -c '
   for environment in /proc/[0-9]*/environ; do

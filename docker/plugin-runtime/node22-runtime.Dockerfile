@@ -10,7 +10,6 @@ RUN groupadd --gid 10002 audiodown-plugin \
     && chown -R 10002:10002 /plugin /sdk /run/audiodown /tmp
 
 COPY --chown=10002:10002 plugin-sdk/node/ /sdk/
-COPY --chmod=0555 docker/plugin-runtime/plugin-token-bootstrap.sh /usr/local/bin/audiodown-plugin-bootstrap
 
 LABEL io.audiodown.trusted-image="true" \
     io.audiodown.trusted-image-kind="node22-runtime" \

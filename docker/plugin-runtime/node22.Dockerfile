@@ -8,7 +8,6 @@ RUN useradd --uid 10002 --create-home --shell /usr/sbin/nologin audiodown-plugin
 
 COPY --chown=10002:10002 plugin-sdk/node/ /sdk/
 COPY --chown=10002:10002 ${PLUGIN_PATH}/ /plugin/
-COPY --chmod=0555 docker/plugin-runtime/plugin-token-bootstrap.sh /usr/local/bin/audiodown-plugin-bootstrap
 
 ENV AUDIODOWN_NODE_SDK_PATH=/sdk/src/index.js \
     NODE_ENV=production
