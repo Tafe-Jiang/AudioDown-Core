@@ -30,10 +30,6 @@ use tokio::{
 use uuid::Uuid;
 
 pub const MAX_PROXY_FRAME_BYTES: usize = 1024 * 1024;
-const MIN_SUCCESS_RESPONSE_BYTES: usize =
-    br#"{"status":200,"headers":{},"bodyBase64":"","error":null}"#.len();
-const MAX_PROXY_RESPONSE_BODY_BYTES: usize =
-    ((MAX_PROXY_FRAME_BYTES - MIN_SUCCESS_RESPONSE_BYTES) / 4) * 3;
 const MAX_TOKEN_BYTES: usize = 4 * 1024;
 const MAX_REQUEST_ID_BYTES: usize = 256;
 const MAX_URL_BYTES: usize = 8 * 1024;
@@ -867,9 +863,6 @@ struct WireResponse {
 
 impl WireResponse {
     fn from_core(response: CoreProxyResponse) -> Result<Self, WireResponseError> {
-        if response.body.len() > MAX_PROXY_RESPONSE_BODY_BYTES {
-            return Err(WireResponseError::TooLarge);
-        }
         let mut headers = HashMap::new();
         for (name, value) in &response.headers {
             let value = value
@@ -880,12 +873,24 @@ impl WireResponse {
                 return Err(WireResponseError::Invalid);
             }
         }
-        Ok(Self {
+        let mut wire = Self {
             status: response.status.as_u16(),
             headers,
-            body_base64: Some(general_purpose::STANDARD.encode(response.body)),
+            body_base64: Some(String::new()),
             error: None,
-        })
+        };
+        let fixed_bytes = serialized_frame_bytes(&wire)?;
+        let encoded_body_bytes = response
+            .body
+            .len()
+            .checked_add(2)
+            .and_then(|bytes| (bytes / 3).checked_mul(4))
+            .ok_or(WireResponseError::TooLarge)?;
+        if encoded_body_bytes > MAX_PROXY_FRAME_BYTES - fixed_bytes {
+            return Err(WireResponseError::TooLarge);
+        }
+        wire.body_base64 = Some(general_purpose::STANDARD.encode(response.body));
+        Ok(wire)
     }
 
     fn error(status: StatusCode, code: &'static str, summary: &'static str) -> Self {
@@ -899,6 +904,40 @@ impl WireResponse {
                 retry_after_seconds: None,
             }),
         }
+    }
+}
+
+#[derive(Default)]
+struct FrameSizeCounter {
+    bytes: usize,
+    exceeded: bool,
+}
+
+impl std::io::Write for FrameSizeCounter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        match self.bytes.checked_add(buffer.len()) {
+            Some(total) if total <= MAX_PROXY_FRAME_BYTES => {
+                self.bytes = total;
+                Ok(buffer.len())
+            }
+            _ => {
+                self.exceeded = true;
+                Err(std::io::Error::other("proxy response exceeded frame limit"))
+            }
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialized_frame_bytes(response: &WireResponse) -> Result<usize, WireResponseError> {
+    let mut counter = FrameSizeCounter::default();
+    match serde_json::to_writer(&mut counter, response) {
+        Ok(()) => Ok(counter.bytes),
+        Err(_) if counter.exceeded => Err(WireResponseError::TooLarge),
+        Err(_) => Err(WireResponseError::Invalid),
     }
 }
 

@@ -411,9 +411,26 @@ async fn oversized_response_body_is_rejected_before_base64_or_json_allocation() 
     let maximum_body_bytes = maximum_base64_bytes / 4 * 3;
     let impossible_body_bytes = maximum_body_bytes + 1;
     let impossible_base64_bytes = maximum_base64_bytes + 4;
-    let backend = LargeBodyBackend::new([
-        vec![b'a'; maximum_body_bytes],
-        vec![b'b'; impossible_body_bytes],
+    let padded_headers = HeaderMap::from_iter([(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&format!("text/plain; padding={}", "x".repeat(4 * 1024))).unwrap(),
+    )]);
+    let backend = LargeResponseBackend::new([
+        CoreProxyResponse::new(
+            StatusCode::OK,
+            HeaderMap::new(),
+            vec![b'a'; maximum_body_bytes],
+        ),
+        CoreProxyResponse::new(
+            StatusCode::OK,
+            padded_headers,
+            vec![b'b'; maximum_body_bytes],
+        ),
+        CoreProxyResponse::new(
+            StatusCode::OK,
+            HeaderMap::new(),
+            vec![b'c'; impossible_body_bytes],
+        ),
     ]);
     let temporary = tempdir().unwrap();
     let path = temporary.path().join("proxy/core.sock");
@@ -436,6 +453,15 @@ async fn oversized_response_body_is_rejected_before_base64_or_json_allocation() 
     assert_eq!(
         boundary["bodyBase64"].as_str().unwrap().len(),
         maximum_base64_bytes
+    );
+
+    let tracker = AllocationTracker::start(maximum_base64_bytes);
+    let header_rejected = send_to(&path, request_frame(Some(&token))).await;
+    let allocated_header_overflow_encoding = tracker.finish();
+    assert_error(&header_rejected, 502, "MESSAGE_TOO_LARGE");
+    assert!(
+        !allocated_header_overflow_encoding,
+        "gateway allocated full base64 before accounting for response headers"
     );
 
     let tracker = AllocationTracker::start(impossible_base64_bytes);
@@ -966,36 +992,31 @@ impl CoreProxyBackend for FakeBackend {
 }
 
 #[derive(Clone)]
-struct LargeBodyBackend {
-    bodies: Arc<Mutex<VecDeque<Vec<u8>>>>,
+struct LargeResponseBackend {
+    responses: Arc<Mutex<VecDeque<CoreProxyResponse>>>,
 }
 
-impl LargeBodyBackend {
-    fn new(bodies: impl IntoIterator<Item = Vec<u8>>) -> Self {
+impl LargeResponseBackend {
+    fn new(responses: impl IntoIterator<Item = CoreProxyResponse>) -> Self {
         Self {
-            bodies: Arc::new(Mutex::new(bodies.into_iter().collect())),
+            responses: Arc::new(Mutex::new(responses.into_iter().collect())),
         }
     }
 }
 
 #[async_trait]
-impl CoreProxyBackend for LargeBodyBackend {
+impl CoreProxyBackend for LargeResponseBackend {
     async fn execute(
         &self,
         _runtime: &AuthenticatedRuntime,
         _request: CoreProxyRequest,
     ) -> Result<CoreProxyResponse, CoreProxyBackendError> {
-        let body = self
-            .bodies
+        Ok(self
+            .responses
             .lock()
             .unwrap()
             .pop_front()
-            .expect("scripted response body");
-        Ok(CoreProxyResponse::new(
-            StatusCode::OK,
-            HeaderMap::new(),
-            body,
-        ))
+            .expect("scripted proxy response"))
     }
 }
 

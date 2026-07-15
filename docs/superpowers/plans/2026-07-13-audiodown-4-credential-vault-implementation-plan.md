@@ -702,6 +702,19 @@ Regenerate the Task 12 review package from the last accepted Task 11 progress
 commit through the repair commit. Task 12 remains incomplete until an
 independent reviewer returns `Approved` with no Critical or Important findings.
 
+The first re-review confirmed five findings fixed but found that the response
+body precheck used an empty-header frame budget. A near-limit body with allowed
+response headers could therefore still allocate full base64 and JSON before the
+final frame fallback.
+
+- [x] Add and confirm a failing header-aware allocation regression.
+- [x] Count the exact serialized empty-body response with a bounded, non-allocating
+  writer before base64 encoding, including headers and JSON escaping.
+- [x] Re-run the focused gateway test, full server suite, Clippy, workspace check,
+  formatting, and diff checks.
+- [x] Commit with `阶段4：修正代理响应帧预算`.
+- [ ] Regenerate the package and obtain a clean independent re-review.
+
 ### Task 13: Isolate Plugins Behind the Fixed Gateway
 
 **Files:**
