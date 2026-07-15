@@ -1,3 +1,5 @@
+use std::{collections::HashMap, sync::Mutex};
+
 use async_trait::async_trait;
 use audiodown_domain::{
     log::{LogLevel, StructuredLog},
@@ -16,7 +18,7 @@ use audiodown_plugin_manager::{
 use audiodown_storage::{PluginRecord, RiskGrantRecord, Storage};
 use audiodown_supervisor_protocol::{
     PluginInstallOperation, PluginInstallOperationList, PluginRemoveResult, PluginRpcResult,
-    PluginRuntimeState,
+    PluginRuntimeState, ProxyToken,
 };
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
@@ -24,6 +26,7 @@ use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::{
+    proxy_gateway::{ProxyTokenRegistry, RuntimeGeneration},
     state::DevelopmentConfig,
     supervisor::{SupervisorClient, SupervisorError},
 };
@@ -296,24 +299,113 @@ impl RepositorySource for UnavailableRepositorySource {
 
 pub struct SupervisorPluginRuntime {
     client: std::sync::Arc<dyn SupervisorClient>,
+    proxy_tokens: Option<std::sync::Arc<ProxyTokenRegistry>>,
+    generations: Mutex<HashMap<PluginId, RuntimeGeneration>>,
 }
 
 impl SupervisorPluginRuntime {
     pub fn new(client: std::sync::Arc<dyn SupervisorClient>) -> Self {
-        Self { client }
+        Self {
+            client,
+            proxy_tokens: None,
+            generations: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn with_proxy_tokens(
+        client: std::sync::Arc<dyn SupervisorClient>,
+        proxy_tokens: std::sync::Arc<ProxyTokenRegistry>,
+    ) -> Self {
+        Self {
+            client,
+            proxy_tokens: Some(proxy_tokens),
+            generations: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn remember_generation(
+        &self,
+        plugin_id: PluginId,
+        generation: RuntimeGeneration,
+    ) -> Result<(), PluginManagerError> {
+        self.generations
+            .lock()
+            .map_err(|_| PluginManagerError::RuntimeUnavailable)?
+            .insert(plugin_id, generation);
+        Ok(())
+    }
+
+    fn revoke_generation(&self, plugin_id: &PluginId) {
+        let generation = self
+            .generations
+            .lock()
+            .ok()
+            .and_then(|mut generations| generations.remove(plugin_id));
+        if let (Some(proxy_tokens), Some(generation)) = (&self.proxy_tokens, generation) {
+            proxy_tokens.revoke(plugin_id, generation);
+        }
+    }
+
+    fn revoke_if_current(&self, plugin_id: &PluginId, generation: RuntimeGeneration) {
+        let removed = self.generations.lock().ok().is_some_and(|mut generations| {
+            if generations.get(plugin_id) == Some(&generation) {
+                generations.remove(plugin_id);
+                true
+            } else {
+                false
+            }
+        });
+        if removed {
+            if let Some(proxy_tokens) = &self.proxy_tokens {
+                proxy_tokens.revoke(plugin_id, generation);
+            }
+        }
+    }
+
+    fn has_generation(&self, plugin_id: &PluginId) -> bool {
+        self.generations
+            .lock()
+            .is_ok_and(|generations| generations.contains_key(plugin_id))
     }
 }
 
 #[async_trait]
 impl PluginRuntimeControl for SupervisorPluginRuntime {
     async fn start(&self, plugin_id: &PluginId) -> Result<PluginRuntimeState, PluginManagerError> {
-        self.client
-            .start_plugin(plugin_id)
+        let Some(proxy_tokens) = &self.proxy_tokens else {
+            return self
+                .client
+                .start_plugin(plugin_id)
+                .await
+                .map_err(runtime_error);
+        };
+        let registered = proxy_tokens
+            .register(plugin_id.clone())
+            .map_err(|_| PluginManagerError::RuntimeUnavailable)?;
+        let generation = registered.generation();
+        let proxy_token = registered
+            .token()
+            .with_value(|value| ProxyToken::new(value.to_string()))
+            .map_err(|_| PluginManagerError::RuntimeUnavailable)?;
+        if let Err(error) = self.remember_generation(plugin_id.clone(), generation) {
+            proxy_tokens.revoke(plugin_id, generation);
+            return Err(error);
+        }
+        match self
+            .client
+            .start_plugin_with_proxy(plugin_id, &proxy_token)
             .await
-            .map_err(runtime_error)
+        {
+            Ok(state) => Ok(state),
+            Err(error) => {
+                self.revoke_if_current(plugin_id, generation);
+                Err(runtime_error(error))
+            }
+        }
     }
 
     async fn stop(&self, plugin_id: &PluginId) -> Result<PluginRuntimeState, PluginManagerError> {
+        self.revoke_generation(plugin_id);
         self.client
             .stop_plugin(plugin_id)
             .await
@@ -324,10 +416,25 @@ impl PluginRuntimeControl for SupervisorPluginRuntime {
         &self,
         plugin_id: &PluginId,
     ) -> Result<PluginRuntimeState, PluginManagerError> {
-        self.client
+        let state = self
+            .client
             .inspect_plugin(plugin_id)
             .await
-            .map_err(runtime_error)
+            .map_err(runtime_error)?;
+        if self.proxy_tokens.is_some()
+            && state.status == audiodown_domain::plugin::PluginStatus::Healthy
+            && !self.has_generation(plugin_id)
+        {
+            return self
+                .client
+                .stop_plugin(plugin_id)
+                .await
+                .map_err(runtime_error);
+        }
+        if state.status != audiodown_domain::plugin::PluginStatus::Healthy {
+            self.revoke_generation(plugin_id);
+        }
+        Ok(state)
     }
 
     async fn invoke(
@@ -343,6 +450,7 @@ impl PluginRuntimeControl for SupervisorPluginRuntime {
     }
 
     async fn remove(&self, plugin_id: &PluginId) -> Result<PluginRemoveResult, PluginManagerError> {
+        self.revoke_generation(plugin_id);
         self.client
             .remove_plugin(plugin_id)
             .await

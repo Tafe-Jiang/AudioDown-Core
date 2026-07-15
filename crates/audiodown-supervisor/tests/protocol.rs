@@ -7,7 +7,7 @@ use chrono::{Duration, TimeZone, Utc};
 use uuid::Uuid;
 
 #[test]
-fn lifecycle_request_accepts_only_plugin_id() {
+fn trusted_start_request_accepts_only_plugin_id_and_proxy_token() {
     let request: SupervisorRequest = serde_json::from_value(serde_json::json!({
         "id": "req-1",
         "token": "token",
@@ -15,22 +15,39 @@ fn lifecycle_request_accepts_only_plugin_id() {
         "nonce": "nonce",
         "method": "plugin.start",
         "params": {
-            "pluginId": "com.audiodown.virtual.content"
+            "pluginId": "com.audiodown.virtual.content",
+            "proxyToken": "runtime-generation-token"
         }
     }))
     .unwrap();
 
-    let Some(SupervisorParams::Plugin(params)) = request.validate_shape().unwrap() else {
-        panic!("expected plugin params");
+    let Some(SupervisorParams::Start(params)) = request.validate_shape().unwrap() else {
+        panic!("expected trusted start params");
     };
     assert_eq!(params.plugin_id.as_str(), "com.audiodown.virtual.content");
+    assert_eq!(
+        params.proxy_token.expose_secret(|value| value.to_string()),
+        "runtime-generation-token"
+    );
+    assert!(!format!("{params:?}").contains("runtime-generation-token"));
 }
 
 #[test]
 fn lifecycle_request_rejects_arbitrary_container_fields() {
-    for field in ["image", "command", "mounts", "environment", "containerName"] {
+    for field in [
+        "image",
+        "command",
+        "mounts",
+        "environment",
+        "containerName",
+        "socketPath",
+        "volumeName",
+        "network",
+        "networkAlias",
+    ] {
         let mut params = serde_json::json!({
-            "pluginId": "com.audiodown.virtual.content"
+            "pluginId": "com.audiodown.virtual.content",
+            "proxyToken": "runtime-generation-token"
         });
         params[field] = serde_json::json!("caller-controlled");
 

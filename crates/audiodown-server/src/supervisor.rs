@@ -12,8 +12,8 @@ pub use audiodown_supervisor_protocol::{
     PluginRemoveResult, PluginRpcResult, PluginRuntimeLog, PluginRuntimeState, SupervisorHealth,
 };
 use audiodown_supervisor_protocol::{
-    PluginInstallRequest, PluginRequest, PluginRpcRequest, SupervisorMethod, SupervisorParams,
-    SupervisorRequest, SupervisorResponse,
+    PluginInstallRequest, PluginRequest, PluginRpcRequest, PluginStartRequest, ProxyToken,
+    SupervisorMethod, SupervisorParams, SupervisorRequest, SupervisorResponse,
 };
 use chrono::Utc;
 use serde::{de::DeserializeOwned, Deserialize};
@@ -37,6 +37,13 @@ pub trait SupervisorClient: Send + Sync {
         &self,
         plugin_id: &PluginId,
     ) -> Result<PluginRuntimeState, SupervisorError>;
+    async fn start_plugin_with_proxy(
+        &self,
+        plugin_id: &PluginId,
+        _proxy_token: &ProxyToken,
+    ) -> Result<PluginRuntimeState, SupervisorError> {
+        self.start_plugin(plugin_id).await
+    }
     async fn stop_plugin(
         &self,
         plugin_id: &PluginId,
@@ -211,11 +218,22 @@ impl SupervisorClient for UnixSupervisorClient {
 
     async fn start_plugin(
         &self,
+        _plugin_id: &PluginId,
+    ) -> Result<PluginRuntimeState, SupervisorError> {
+        Err(SupervisorError::InvalidResponse)
+    }
+
+    async fn start_plugin_with_proxy(
+        &self,
         plugin_id: &PluginId,
+        proxy_token: &ProxyToken,
     ) -> Result<PluginRuntimeState, SupervisorError> {
         self.call(
             SupervisorMethod::PluginStart,
-            Some(plugin_params(plugin_id)),
+            Some(SupervisorParams::Start(PluginStartRequest {
+                plugin_id: plugin_id.clone(),
+                proxy_token: proxy_token.clone(),
+            })),
         )
         .await
     }

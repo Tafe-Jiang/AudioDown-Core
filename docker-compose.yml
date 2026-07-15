@@ -13,11 +13,33 @@ services:
       AUDIODOWN_DEV_TOKEN: "${AUDIODOWN_DEV_TOKEN:-}"
       AUDIODOWN_GITHUB_API_BASE: "${AUDIODOWN_GITHUB_API_BASE:-https://api.github.com}"
       AUDIODOWN_GITHUB_ARCHIVE_BASE: "${AUDIODOWN_GITHUB_ARCHIVE_BASE:-https://codeload.github.com}"
+      AUDIODOWN_PROXY_SOCKET: "/run/audiodown-proxy/core.sock"
     ports:
       - "${AUDIODOWN_PORT:-18080}:18080"
     volumes:
       - "${AUDIODOWN_HOST_DATA_DIR:-./data}:/data"
       - audiodown-control:/run/audiodown
+      - audiodown-proxy:/run/audiodown-proxy
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        set -eu;
+        chown -R 10001:10001 /data;
+        chown 10001:10001 /run/audiodown-proxy;
+        chmod 755 /run/audiodown-proxy;
+        attempts=0;
+        while [ ! -f /run/audiodown/core.token ]; do
+          attempts=$$((attempts + 1));
+          if [ "$$attempts" -ge 60 ]; then
+            echo 'Supervisor token was not created' >&2;
+            exit 1;
+          fi;
+          sleep 1;
+        done;
+        chown 10001:10001 /run/audiodown/core.token;
+        chmod 600 /run/audiodown/core.token;
+        exec gosu audiodown /usr/local/bin/audiodown-server
 
   supervisor:
     build:
@@ -28,10 +50,30 @@ services:
     restart: unless-stopped
     environment:
       AUDIODOWN_SUPERVISOR_IMAGE: "audiodown/supervisor:1.0.0-alpha.1"
+      AUDIODOWN_PLUGIN_GATEWAY_IMAGE: "audiodown/plugin-gateway:1.0.0-alpha.1"
+      AUDIODOWN_PROXY_VOLUME: "${AUDIODOWN_PROXY_VOLUME:-audiodown-proxy}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - "${AUDIODOWN_HOST_DATA_DIR:-./data}/plugins:/data/plugins"
       - audiodown-control:/run/audiodown
 
+  plugin-gateway-image:
+    profiles:
+      - gateway-image
+    build:
+      context: .
+      dockerfile: docker/plugin-gateway.Dockerfile
+    image: audiodown/plugin-gateway:1.0.0-alpha.1
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    entrypoint:
+      - /bin/true
+
 volumes:
   audiodown-control:
+  audiodown-proxy:
+    name: "${AUDIODOWN_PROXY_VOLUME:-audiodown-proxy}"

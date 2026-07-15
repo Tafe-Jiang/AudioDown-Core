@@ -68,7 +68,10 @@ async fn main() -> anyhow::Result<()> {
             semver::Version::new(1, 0, 0),
         )
         .with_installation_ports(
-            Arc::new(SupervisorPluginRuntime::new(supervisor.clone())),
+            Arc::new(SupervisorPluginRuntime::with_proxy_tokens(
+                supervisor.clone(),
+                Arc::clone(&proxy_tokens),
+            )),
             Arc::new(ConfiguredLifecycleRiskAuthorizer::new(development.clone())),
         ),
     );

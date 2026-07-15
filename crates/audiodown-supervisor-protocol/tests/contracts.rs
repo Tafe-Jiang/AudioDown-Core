@@ -7,7 +7,8 @@ use audiodown_supervisor_protocol::{
     PluginBuildLog, PluginBuildLogStream, PluginInstallArtifact, PluginInstallOperation,
     PluginInstallOperationList, PluginInstallOperationState, PluginInstallOperationSummary,
     PluginInstallRequest, PluginRemoveResult, PluginRequest, PluginRpcRequest, PluginRpcResult,
-    ProtocolError, SupervisorMethod, SupervisorParams, SupervisorRequest, SupervisorResponse,
+    PluginStartRequest, ProtocolError, ProxyToken, SupervisorMethod, SupervisorParams,
+    SupervisorRequest, SupervisorResponse,
 };
 use uuid::Uuid;
 
@@ -84,6 +85,112 @@ fn accepts_only_method_specific_parameter_shapes() {
     assert!(matches!(
         rpc.validate_shape(),
         Ok(Some(SupervisorParams::Rpc(_)))
+    ));
+}
+
+#[test]
+fn plugin_start_requires_only_a_plugin_id_and_redacted_proxy_token() {
+    let token_canary = "proxy-token-contract-canary";
+    let request: SupervisorRequest = serde_json::from_value(serde_json::json!({
+        "id": "req-start",
+        "token": "control-token",
+        "timestamp": 1,
+        "nonce": "nonce",
+        "method": "plugin.start",
+        "params": {
+            "pluginId": "com.audiodown.virtual.content",
+            "proxyToken": token_canary
+        }
+    }))
+    .unwrap();
+
+    let Some(SupervisorParams::Start(params)) = request.validate_shape().unwrap() else {
+        panic!("expected trusted start params");
+    };
+    assert_eq!(params.plugin_id.as_str(), "com.audiodown.virtual.content");
+    assert_eq!(
+        params.proxy_token.expose_secret(|value| value.to_string()),
+        token_canary
+    );
+    assert!(!format!("{params:?}").contains(token_canary));
+    assert!(!format!("{:?}", params.proxy_token).contains(token_canary));
+
+    let encoded = serde_json::to_value(PluginStartRequest {
+        plugin_id: params.plugin_id.clone(),
+        proxy_token: ProxyToken::new(token_canary).unwrap(),
+    })
+    .unwrap();
+    assert_eq!(
+        encoded,
+        serde_json::json!({
+            "pluginId": "com.audiodown.virtual.content",
+            "proxyToken": token_canary
+        })
+    );
+}
+
+#[test]
+fn plugin_start_rejects_missing_invalid_and_caller_controlled_runtime_fields() {
+    for invalid in ["", "contains\0nul"] {
+        assert!(ProxyToken::new(invalid).is_err());
+    }
+    assert!(ProxyToken::new(&"x".repeat(4097)).is_err());
+
+    let missing: SupervisorRequest = serde_json::from_value(serde_json::json!({
+        "id": "req-start",
+        "token": "control-token",
+        "timestamp": 1,
+        "nonce": "nonce",
+        "method": "plugin.start",
+        "params": {"pluginId": "com.audiodown.virtual.content"}
+    }))
+    .unwrap();
+    assert!(matches!(
+        missing.validate_shape(),
+        Err(ProtocolError::InvalidParams)
+    ));
+
+    for field in [
+        "image",
+        "command",
+        "socketPath",
+        "volumeName",
+        "mounts",
+        "network",
+        "networkAlias",
+        "environment",
+    ] {
+        let mut params = serde_json::json!({
+            "pluginId": "com.audiodown.virtual.content",
+            "proxyToken": "trusted-token"
+        });
+        params[field] = serde_json::json!("caller-controlled");
+        let decoded = serde_json::from_value::<SupervisorRequest>(serde_json::json!({
+            "id": "req-start",
+            "token": "control-token",
+            "timestamp": 1,
+            "nonce": "nonce",
+            "method": "plugin.start",
+            "params": params
+        }));
+        assert!(decoded.is_err(), "field {field} must be rejected");
+    }
+
+    let stop_with_token: SupervisorRequest = serde_json::from_value(serde_json::json!({
+        "id": "req-stop",
+        "token": "control-token",
+        "timestamp": 1,
+        "nonce": "nonce",
+        "method": "plugin.stop",
+        "params": {
+            "pluginId": "com.audiodown.virtual.content",
+            "proxyToken": "not-allowed-on-stop"
+        }
+    }))
+    .unwrap();
+    assert!(matches!(
+        stop_with_token.validate_shape(),
+        Err(ProtocolError::InvalidParams)
     ));
 }
 

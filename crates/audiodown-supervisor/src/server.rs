@@ -29,8 +29,10 @@ const NONCE_RETENTION: Duration = Duration::from_secs(120);
 pub async fn run(
     config: Config,
     identity: SupervisorIdentity,
-    docker: DockerAdapter,
+    mut docker: DockerAdapter,
 ) -> anyhow::Result<()> {
+    docker.configure_gateway(config.gateway_runtime_config()?);
+    docker.reconcile_runtime_resources().await?;
     prepare_socket(&config.socket_path).await?;
     let listener = UnixListener::bind(&config.socket_path)?;
     set_socket_permissions(&config.socket_path).await?;
@@ -128,7 +130,8 @@ async fn dispatch(
             }
         }
         SupervisorMethod::PluginStart => {
-            let plugin_id = plugin_params(request.params).plugin_id;
+            let params = start_params(request.params);
+            let plugin_id = params.plugin_id;
             let install = match install_record::load(
                 &runtime.plugin_data,
                 &runtime.installation_id,
@@ -138,14 +141,19 @@ async fn dispatch(
             {
                 Ok(install) => install,
                 Err(error) => {
+                    let _ = runtime.docker.stop_plugin(&plugin_id).await;
                     return SupervisorResponse::failure(
                         request.id,
                         "INVALID_INSTALL_RECORD",
                         error.to_string(),
-                    )
+                    );
                 }
             };
-            match runtime.docker.start_plugin(install).await {
+            match runtime
+                .docker
+                .start_plugin(install, params.proxy_token)
+                .await
+            {
                 Ok(started) => SupervisorResponse::success(
                     request.id,
                     serde_json::json!({
@@ -296,6 +304,15 @@ async fn dispatch(
 fn plugin_params(params: Option<SupervisorParams>) -> audiodown_supervisor_protocol::PluginRequest {
     let Some(SupervisorParams::Plugin(params)) = params else {
         unreachable!("validated plugin method has plugin params");
+    };
+    params
+}
+
+fn start_params(
+    params: Option<SupervisorParams>,
+) -> audiodown_supervisor_protocol::PluginStartRequest {
+    let Some(SupervisorParams::Start(params)) = params else {
+        unreachable!("validated start method has trusted start params");
     };
     params
 }

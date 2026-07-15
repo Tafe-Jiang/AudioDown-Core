@@ -8,12 +8,17 @@ use audiodown_plugin_api::{
     },
     rpc::JsonRpcResponse,
 };
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{Error as DeError, Visitor},
+    Deserialize, Deserializer, Serialize, Serializer,
+};
+use std::fmt;
 use uuid::Uuid;
 
 const MAX_OPERATION_LIST_ITEMS: usize = 256;
 const MAX_ERROR_DETAILS_BYTES: usize = 64 * 1024;
 const MAX_PLUGIN_RPC_BYTES: usize = 1024 * 1024;
+const MAX_PROXY_TOKEN_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -46,8 +51,12 @@ impl SupervisorRequest {
                 Some(_) => Err(ProtocolError::InvalidParams),
                 None => Err(ProtocolError::MissingParams),
             },
-            SupervisorMethod::PluginStart
-            | SupervisorMethod::PluginStop
+            SupervisorMethod::PluginStart => match self.params.as_ref() {
+                Some(params @ SupervisorParams::Start(_)) => Ok(Some(params)),
+                Some(_) => Err(ProtocolError::InvalidParams),
+                None => Err(ProtocolError::MissingParams),
+            },
+            SupervisorMethod::PluginStop
             | SupervisorMethod::PluginInspect
             | SupervisorMethod::PluginLogs
             | SupervisorMethod::PluginRemove => match self.params.as_ref() {
@@ -120,6 +129,7 @@ impl SupervisorMethod {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum SupervisorParams {
+    Start(PluginStartRequest),
     Install(PluginInstallRequest),
     Plugin(PluginRequest),
     Rpc(PluginRpcRequest),
@@ -129,6 +139,82 @@ pub enum SupervisorParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginRequest {
     pub plugin_id: PluginId,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginStartRequest {
+    pub plugin_id: PluginId,
+    pub proxy_token: ProxyToken,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProxyToken(String);
+
+impl ProxyToken {
+    pub fn new(value: impl Into<String>) -> Result<Self, ProtocolError> {
+        let value = value.into();
+        if value.is_empty() || value.len() > MAX_PROXY_TOKEN_BYTES || value.as_bytes().contains(&0)
+        {
+            return Err(ProtocolError::InvalidProxyToken);
+        }
+        Ok(Self(value))
+    }
+
+    pub fn expose_secret<R>(&self, use_secret: impl FnOnce(&str) -> R) -> R {
+        use_secret(&self.0)
+    }
+}
+
+impl fmt::Debug for ProxyToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ProxyToken")
+            .field(&"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Serialize for ProxyToken {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProxyToken {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ProxyTokenVisitor;
+
+        impl Visitor<'_> for ProxyTokenVisitor {
+            type Value = ProxyToken;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a bounded non-empty proxy token")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: DeError,
+            {
+                ProxyToken::new(value).map_err(E::custom)
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: DeError,
+            {
+                ProxyToken::new(value).map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_string(ProxyTokenVisitor)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -416,6 +502,8 @@ pub enum ProtocolError {
     UnexpectedParams,
     #[error("request parameters do not match the method")]
     InvalidParams,
+    #[error("proxy token is invalid")]
+    InvalidProxyToken,
     #[error("plugin RPC parameters are invalid")]
     InvalidRpcParams,
     #[error("plugin RPC parameters exceed the size limit")]

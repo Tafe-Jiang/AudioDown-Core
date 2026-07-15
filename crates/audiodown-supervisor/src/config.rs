@@ -6,12 +6,16 @@ use std::{
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
+use crate::policy::{GatewayRuntimeConfig, DEFAULT_GATEWAY_IMAGE, DEFAULT_PROXY_VOLUME};
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub socket_path: PathBuf,
     pub plugin_data: PathBuf,
     pub installation_id_file: PathBuf,
     pub core_token_file: PathBuf,
+    pub gateway_image: String,
+    pub proxy_volume: String,
 }
 
 impl Config {
@@ -27,7 +31,16 @@ impl Config {
                 "/data/plugins/installation-id",
             ),
             core_token_file: env_path("AUDIODOWN_CORE_TOKEN_FILE", "/run/audiodown/core.token"),
+            gateway_image: env::var("AUDIODOWN_PLUGIN_GATEWAY_IMAGE")
+                .unwrap_or_else(|_| DEFAULT_GATEWAY_IMAGE.to_string()),
+            proxy_volume: env::var("AUDIODOWN_PROXY_VOLUME")
+                .unwrap_or_else(|_| DEFAULT_PROXY_VOLUME.to_string()),
         }
+    }
+
+    pub fn gateway_runtime_config(&self) -> anyhow::Result<GatewayRuntimeConfig> {
+        GatewayRuntimeConfig::new(&self.gateway_image, &self.proxy_volume)
+            .map_err(anyhow::Error::from)
     }
 }
 

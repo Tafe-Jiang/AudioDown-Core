@@ -236,6 +236,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "audiodown-proxy-gateway"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "axum",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "audiodown-server"
 version = "1.0.0-alpha.1"
 dependencies = [

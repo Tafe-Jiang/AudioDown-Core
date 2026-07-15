@@ -729,19 +729,29 @@ final frame fallback.
 - Modify: `crates/audiodown-supervisor-protocol/tests/contracts.rs`
 - Modify: `crates/audiodown-server/src/supervisor.rs`
 - Modify: `crates/audiodown-server/src/plugin_manager_adapters.rs`
+- Modify: `crates/audiodown-server/src/main.rs`
 - Modify: `crates/audiodown-server/tests/supervisor_client.rs`
 - Modify: `crates/audiodown-supervisor/src/config.rs`
 - Modify: `crates/audiodown-supervisor/src/policy.rs`
 - Modify: `crates/audiodown-supervisor/src/docker.rs`
+- Modify: `crates/audiodown-supervisor/src/server.rs`
 - Modify: `crates/audiodown-supervisor/tests/policy.rs`
 - Modify: `crates/audiodown-supervisor/tests/protocol.rs`
 - Modify: `tests/security-boundary.sh`
 
-- [ ] **Step 1: Write failing protocol and runtime-policy tests**
+Design correction: the original Task 13 whitelist omitted the two direct
+composition roots required by the locked architecture. Core `main.rs` must
+inject the same in-memory `ProxyTokenRegistry` into the plugin runtime adapter
+that owns start/stop/revoke. Supervisor `server.rs` must pass the trusted typed
+start token from the authenticated protocol request into `DockerAdapter` and
+invoke the paired plugin/Gateway cleanup path. These are wiring changes only;
+they add no public HTTP inputs and do not expand Task 13 behavior.
+
+- [x] **Step 1: Write failing protocol and runtime-policy tests**
 
 Require the fixed Gateway binary to relay one bounded request between an internal HTTP listener and the Core Unix Socket without logging bodies or tokens. Require trusted start requests to carry only plugin ID and a redacted proxy token. Supervisor must derive a per-plugin internal network, fixed Gateway image/name/alias, fixed backend Socket path, and configured proxy volume; the Gateway alone receives the read-only proxy volume, while the plugin receives only the exact Gateway URL and token. Reject caller-controlled paths, images, commands, volume names, mounts, networks, aliases, or tokens from public HTTP. Extend security assertions to prove the plugin network contains only that plugin and its Gateway, has `internal=true`, has no public/private egress, and cannot reach Core Web or another plugin.
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 ```bash
 cargo test -p audiodown-proxy-gateway
@@ -753,11 +763,11 @@ cargo test -p audiodown-supervisor --test policy --test protocol
 
 Expected: FAIL because the fixed Gateway image, per-plugin internal network, and derived runtime policy do not exist.
 
-- [ ] **Step 3: Implement minimum runtime integration**
+- [x] **Step 3: Implement minimum runtime integration**
 
 Add an explicit Compose proxy volume with a configurable installation-scoped name and mount it only into Core. Build the fixed Gateway image from repository-owned code. On plugin start, register the token, create the per-plugin internal network, start the Gateway with the proxy volume mounted read-only, attach only the plugin and Gateway, and pass the exact Gateway URL/token to the plugin. On start failure, stop, remove, uninstall, or Core restart, revoke the token and remove the Gateway/network. Retain all existing sandbox settings for both containers; neither receives Core data, downloads, control token, Docker Socket, public ports, or an external network.
 
-- [ ] **Step 4: Run runtime checks**
+- [x] **Step 4: Run runtime checks**
 
 ```bash
 cargo test -p audiodown-proxy-gateway
@@ -769,7 +779,7 @@ cargo clippy -p audiodown-proxy-gateway --all-targets -- -D warnings
 docker compose config
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock docker-compose.yml docker/plugin-gateway.Dockerfile crates/audiodown-proxy-gateway crates/audiodown-supervisor-protocol crates/audiodown-server crates/audiodown-supervisor tests/security-boundary.sh

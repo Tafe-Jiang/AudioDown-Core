@@ -7,6 +7,7 @@ members = [
   "crates/audiodown-network-proxy",
   "crates/audiodown-plugin-api",
   "crates/audiodown-plugin-manager",
+  "crates/audiodown-proxy-gateway",
   "crates/audiodown-storage",
   "crates/audiodown-logging",
   "crates/audiodown-server",

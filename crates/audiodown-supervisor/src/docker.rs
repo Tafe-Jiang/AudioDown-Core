@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -9,14 +9,16 @@ use audiodown_plugin_api::{
     content::ContentMethod,
     rpc::{JsonRpcRequest, JsonRpcResponse},
 };
-use audiodown_supervisor_protocol::{PluginRpcResult, ProtocolError};
+use audiodown_supervisor_protocol::{PluginRpcResult, ProtocolError, ProxyToken};
 use bollard::{
     container::LogOutput,
     exec::{CreateExecOptions, StartExecResults},
-    models::{ContainerCreateBody, HostConfig},
+    models::{
+        ContainerCreateBody, EndpointSettings, HostConfig, NetworkCreateRequest, NetworkingConfig,
+    },
     query_parameters::{
-        CreateContainerOptionsBuilder, LogsOptionsBuilder, RemoveContainerOptionsBuilder,
-        RemoveImageOptionsBuilder, StopContainerOptionsBuilder,
+        CreateContainerOptionsBuilder, ListNetworksOptionsBuilder, LogsOptionsBuilder,
+        RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder,
     },
     Docker,
 };
@@ -27,7 +29,7 @@ use uuid::Uuid;
 
 use crate::{
     install_record::ValidatedInstall,
-    policy::{PluginContainerPolicy, PolicyError},
+    policy::{GatewayRuntimeConfig, PluginRuntimePolicy, PolicyError, RuntimeResourceNames},
 };
 
 const RPC_SOCKET: &str = "/tmp/audiodown-rpc.sock";
@@ -39,6 +41,7 @@ pub const PLUGIN_RPC_TIMEOUT: Duration = Duration::from_secs(8);
 pub struct DockerAdapter {
     docker: Docker,
     installation_id: String,
+    gateway_config: GatewayRuntimeConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,151 +73,124 @@ pub struct ContentRpcExecPlan {
     pub working_dir: String,
 }
 
+#[derive(Debug, Default)]
+struct RuntimeCleanup {
+    plugin_container_id: Option<String>,
+}
+
 impl DockerAdapter {
     pub fn connect(installation_id: String) -> Result<Self, DockerAdapterError> {
         Ok(Self {
             docker: Docker::connect_with_local_defaults()?,
             installation_id,
+            gateway_config: GatewayRuntimeConfig::default(),
         })
+    }
+
+    pub fn configure_gateway(&mut self, gateway_config: GatewayRuntimeConfig) {
+        self.gateway_config = gateway_config;
+    }
+
+    pub async fn reconcile_runtime_resources(&self) -> Result<(), DockerAdapterError> {
+        let mut plugin_ids = HashSet::new();
+        let mut container_filters = HashMap::new();
+        container_filters.insert(
+            "label".to_string(),
+            vec![
+                "io.audiodown.managed=true".to_string(),
+                format!("io.audiodown.installation={}", self.installation_id),
+                "io.audiodown.resource=gateway".to_string(),
+            ],
+        );
+        let containers = self
+            .docker
+            .list_containers(Some(
+                bollard::query_parameters::ListContainersOptionsBuilder::new()
+                    .all(true)
+                    .filters(&container_filters)
+                    .build(),
+            ))
+            .await?;
+        for container in containers {
+            let labels = container.labels.unwrap_or_default();
+            verify_managed_labels(&labels, &self.installation_id, "gateway")?;
+            let plugin_id = labels
+                .get("io.audiodown.plugin-id")
+                .ok_or(DockerAdapterError::LabelMismatch)
+                .and_then(|value| {
+                    PluginId::parse(value).map_err(|_| DockerAdapterError::LabelMismatch)
+                })?;
+            plugin_ids.insert(plugin_id);
+        }
+
+        let mut network_filters = HashMap::new();
+        network_filters.insert(
+            "label".to_string(),
+            vec![
+                "io.audiodown.managed=true".to_string(),
+                format!("io.audiodown.installation={}", self.installation_id),
+                "io.audiodown.resource=network".to_string(),
+            ],
+        );
+        let networks = self
+            .docker
+            .list_networks(Some(
+                ListNetworksOptionsBuilder::new()
+                    .filters(&network_filters)
+                    .build(),
+            ))
+            .await?;
+        for network in networks {
+            let labels = network.labels.unwrap_or_default();
+            verify_managed_labels(&labels, &self.installation_id, "network")?;
+            let plugin_id = labels
+                .get("io.audiodown.plugin-id")
+                .ok_or(DockerAdapterError::LabelMismatch)
+                .and_then(|value| {
+                    PluginId::parse(value).map_err(|_| DockerAdapterError::LabelMismatch)
+                })?;
+            plugin_ids.insert(plugin_id);
+        }
+
+        for plugin_id in plugin_ids {
+            self.cleanup_runtime_resources(&plugin_id).await?;
+        }
+        Ok(())
     }
 
     pub async fn start_plugin(
         &self,
         install: ValidatedInstall,
+        proxy_token: ProxyToken,
     ) -> Result<StartedPlugin, DockerAdapterError> {
-        self.verify_install_image(&install).await?;
         let plugin_id = install.installed.plugin_id.clone();
         let plugin_version = install.manifest.version.to_string();
-        let spec = PluginContainerPolicy::build(install.installed)?;
+        self.cleanup_runtime_resources(&plugin_id).await?;
+        self.verify_install_image(&install).await?;
+        let policy = PluginRuntimePolicy::build(
+            install.installed,
+            self.gateway_config.clone(),
+            proxy_token,
+        )?;
 
-        if let Some(existing) = self.find_managed_container(&plugin_id).await? {
-            self.docker
-                .remove_container(
-                    &existing,
-                    Some(
-                        RemoveContainerOptionsBuilder::new()
-                            .force(true)
-                            .v(true)
-                            .build(),
-                    ),
-                )
-                .await?;
+        let started = self.start_runtime(&policy, &plugin_version).await;
+        match started {
+            Ok(started) => Ok(started),
+            Err(start_error) => match self.cleanup_runtime_resources(&plugin_id).await {
+                Ok(_) => Err(start_error),
+                Err(_) => Err(DockerAdapterError::RuntimeCleanupFailed),
+            },
         }
-
-        let tmpfs = spec
-            .tmpfs
-            .iter()
-            .filter_map(|entry| entry.split_once(':'))
-            .map(|(path, options)| (path.to_string(), options.to_string()))
-            .collect();
-        let host_config = HostConfig {
-            memory: Some(spec.memory_bytes),
-            memory_swap: Some(spec.memory_bytes),
-            nano_cpus: Some(spec.nano_cpus),
-            pids_limit: Some(spec.pids_limit),
-            binds: Some(spec.mounts),
-            network_mode: Some("none".to_string()),
-            privileged: Some(spec.privileged),
-            publish_all_ports: Some(false),
-            readonly_rootfs: Some(spec.read_only),
-            cap_add: Some(spec.cap_add),
-            cap_drop: Some(spec.cap_drop),
-            security_opt: Some(spec.security_opt),
-            tmpfs: Some(tmpfs),
-            init: Some(true),
-            auto_remove: Some(false),
-            ..Default::default()
-        };
-        let config = ContainerCreateBody {
-            image: Some(spec.image_id),
-            user: Some("10002:10002".to_string()),
-            working_dir: Some("/plugin".to_string()),
-            entrypoint: Some(spec.command),
-            env: Some(vec![
-                format!("AUDIODOWN_RPC_SOCKET={RPC_SOCKET}"),
-                "AUDIODOWN_NODE_SDK_PATH=/sdk/src/index.js".to_string(),
-                "NODE_ENV=production".to_string(),
-            ]),
-            labels: Some(spec.labels),
-            network_disabled: Some(true),
-            attach_stdout: Some(false),
-            attach_stderr: Some(false),
-            open_stdin: Some(false),
-            tty: Some(false),
-            host_config: Some(host_config),
-            ..Default::default()
-        };
-        let created = self
-            .docker
-            .create_container(
-                Some(
-                    CreateContainerOptionsBuilder::new()
-                        .name(&spec.container_name)
-                        .build(),
-                ),
-                config,
-            )
-            .await?;
-        self.docker
-            .start_container(
-                &created.id,
-                None::<bollard::query_parameters::StartContainerOptions>,
-            )
-            .await?;
-
-        if let Err(error) = self
-            .wait_for_handshake(&created.id, &plugin_id, &plugin_version)
-            .await
-        {
-            let _ = self
-                .docker
-                .remove_container(
-                    &created.id,
-                    Some(
-                        RemoveContainerOptionsBuilder::new()
-                            .force(true)
-                            .v(true)
-                            .build(),
-                    ),
-                )
-                .await;
-            return Err(error);
-        }
-
-        let logs = self.plugin_logs_by_container(&created.id).await?;
-        Ok(StartedPlugin {
-            container_id: created.id,
-            logs,
-        })
     }
 
     pub async fn stop_plugin(
         &self,
         plugin_id: &PluginId,
     ) -> Result<Option<String>, DockerAdapterError> {
-        let Some(container_id) = self.find_managed_container(plugin_id).await? else {
-            return Ok(None);
-        };
-        let inspect = self
-            .docker
-            .inspect_container(
-                &container_id,
-                None::<bollard::query_parameters::InspectContainerOptions>,
-            )
-            .await?;
-        if inspect
-            .state
-            .and_then(|state| state.running)
-            .unwrap_or(false)
-        {
-            self.docker
-                .stop_container(
-                    &container_id,
-                    Some(StopContainerOptionsBuilder::new().t(5).build()),
-                )
-                .await?;
-        }
-        Ok(Some(container_id))
+        Ok(self
+            .cleanup_runtime_resources(plugin_id)
+            .await?
+            .plugin_container_id)
     }
 
     pub async fn inspect_plugin(
@@ -227,19 +203,44 @@ impl DockerAdapter {
                 running: false,
             });
         };
-        let inspect = self
+        let Some(gateway_id) = self
+            .find_managed_container_by_resource(plugin_id, "gateway")
+            .await?
+        else {
+            return Ok(PluginInspection {
+                container_id: Some(container_id),
+                running: false,
+            });
+        };
+        let plugin_inspect = self
             .docker
             .inspect_container(
                 &container_id,
                 None::<bollard::query_parameters::InspectContainerOptions>,
             )
             .await?;
+        let gateway_inspect = self
+            .docker
+            .inspect_container(
+                &gateway_id,
+                None::<bollard::query_parameters::InspectContainerOptions>,
+            )
+            .await?;
+        let names = RuntimeResourceNames::for_plugin(plugin_id);
+        let network_running = self
+            .inspect_managed_network(plugin_id, &names.network)
+            .await?;
         Ok(PluginInspection {
             container_id: Some(container_id),
-            running: inspect
-                .state
-                .and_then(|state| state.running)
-                .unwrap_or(false),
+            running: network_running
+                && plugin_inspect
+                    .state
+                    .and_then(|state| state.running)
+                    .unwrap_or(false)
+                && gateway_inspect
+                    .state
+                    .and_then(|state| state.running)
+                    .unwrap_or(false),
         })
     }
 
@@ -330,7 +331,7 @@ impl DockerAdapter {
         install: ValidatedInstall,
     ) -> Result<audiodown_supervisor_protocol::PluginRemoveResult, DockerAdapterError> {
         let plan = managed_removal_plan(plugin_data, &self.installation_id, &install)?;
-        let container_id = self.find_managed_container(&plan.plugin_id).await?;
+        let cleanup = self.cleanup_runtime_resources(&plan.plugin_id).await?;
         let image = self.docker.inspect_image(&plan.image_id).await?;
         let labels = image
             .config
@@ -344,22 +345,6 @@ impl DockerAdapter {
             return Err(DockerAdapterError::ImageLabelMismatch);
         }
 
-        let removed_container = if let Some(container_id) = container_id {
-            self.docker
-                .remove_container(
-                    &container_id,
-                    Some(
-                        RemoveContainerOptionsBuilder::new()
-                            .force(true)
-                            .v(true)
-                            .build(),
-                    ),
-                )
-                .await?;
-            true
-        } else {
-            false
-        };
         self.docker
             .remove_image(
                 &plan.image_id,
@@ -376,7 +361,7 @@ impl DockerAdapter {
 
         Ok(audiodown_supervisor_protocol::PluginRemoveResult {
             plugin_id: plan.plugin_id,
-            removed_container,
+            removed_container: cleanup.plugin_container_id.is_some(),
             removed_image: true,
             removed_install_directory: true,
         })
@@ -386,6 +371,15 @@ impl DockerAdapter {
         &self,
         plugin_id: &PluginId,
     ) -> Result<Option<String>, DockerAdapterError> {
+        self.find_managed_container_by_resource(plugin_id, "plugin")
+            .await
+    }
+
+    async fn find_managed_container_by_resource(
+        &self,
+        plugin_id: &PluginId,
+        resource: &str,
+    ) -> Result<Option<String>, DockerAdapterError> {
         let mut filters = HashMap::new();
         filters.insert(
             "label".to_string(),
@@ -393,6 +387,7 @@ impl DockerAdapter {
                 "io.audiodown.managed=true".to_string(),
                 format!("io.audiodown.installation={}", self.installation_id),
                 format!("io.audiodown.plugin-id={plugin_id}"),
+                format!("io.audiodown.resource={resource}"),
             ],
         );
         let containers = self
@@ -405,21 +400,274 @@ impl DockerAdapter {
             ))
             .await?;
 
+        let mut found = None;
         for container in containers {
             let labels = container.labels.unwrap_or_default();
-            if labels.get("io.audiodown.managed").map(String::as_str) != Some("true")
-                || labels.get("io.audiodown.installation").map(String::as_str)
-                    != Some(self.installation_id.as_str())
+            if verify_managed_labels(&labels, &self.installation_id, resource).is_err()
                 || labels.get("io.audiodown.plugin-id").map(String::as_str)
                     != Some(plugin_id.as_str())
             {
                 return Err(DockerAdapterError::LabelMismatch);
             }
             if let Some(id) = container.id {
-                return Ok(Some(id));
+                if found.replace(id).is_some() {
+                    return Err(DockerAdapterError::LabelMismatch);
+                }
             }
         }
-        Ok(None)
+        Ok(found)
+    }
+
+    async fn start_runtime(
+        &self,
+        policy: &PluginRuntimePolicy,
+        plugin_version: &str,
+    ) -> Result<StartedPlugin, DockerAdapterError> {
+        self.docker
+            .create_network(NetworkCreateRequest {
+                name: policy.network.name.clone(),
+                driver: Some("bridge".to_string()),
+                internal: Some(policy.network.internal),
+                attachable: Some(policy.network.attachable),
+                ingress: Some(false),
+                enable_ipv6: Some(false),
+                options: Some(HashMap::from([(
+                    "com.docker.network.bridge.enable_ip_masquerade".to_string(),
+                    "false".to_string(),
+                )])),
+                labels: Some(policy.network.labels.clone()),
+                ..Default::default()
+            })
+            .await?;
+
+        let gateway_tmpfs = tmpfs_options(&policy.gateway.tmpfs);
+        let gateway_config = ContainerCreateBody {
+            image: Some(policy.gateway.image.clone()),
+            user: Some("10003:10003".to_string()),
+            working_dir: Some("/".to_string()),
+            env: Some(Vec::new()),
+            labels: Some(policy.gateway.labels.clone()),
+            network_disabled: Some(false),
+            attach_stdout: Some(false),
+            attach_stderr: Some(false),
+            open_stdin: Some(false),
+            tty: Some(false),
+            host_config: Some(HostConfig {
+                memory: Some(policy.gateway.memory_bytes),
+                memory_swap: Some(policy.gateway.memory_bytes),
+                nano_cpus: Some(policy.gateway.nano_cpus),
+                pids_limit: Some(policy.gateway.pids_limit),
+                binds: Some(policy.gateway.mounts.clone()),
+                network_mode: Some(policy.gateway.network_name.clone()),
+                privileged: Some(policy.gateway.privileged),
+                publish_all_ports: Some(false),
+                readonly_rootfs: Some(policy.gateway.read_only),
+                cap_add: Some(policy.gateway.cap_add.clone()),
+                cap_drop: Some(policy.gateway.cap_drop.clone()),
+                security_opt: Some(policy.gateway.security_opt.clone()),
+                tmpfs: Some(gateway_tmpfs),
+                dns: Some(policy.gateway.dns.clone()),
+                init: Some(true),
+                auto_remove: Some(false),
+                ..Default::default()
+            }),
+            networking_config: Some(networking_config(
+                &policy.gateway.network_name,
+                vec![policy.gateway.network_alias.to_string()],
+            )),
+            ..Default::default()
+        };
+        let gateway = self
+            .docker
+            .create_container(
+                Some(
+                    CreateContainerOptionsBuilder::new()
+                        .name(&policy.gateway.container_name)
+                        .build(),
+                ),
+                gateway_config,
+            )
+            .await?;
+        self.docker
+            .start_container(
+                &gateway.id,
+                None::<bollard::query_parameters::StartContainerOptions>,
+            )
+            .await?;
+
+        let plugin_tmpfs = tmpfs_options(&policy.plugin.tmpfs);
+        let proxy_token = policy
+            .plugin
+            .proxy_token
+            .expose_secret(|value| format!("AUDIODOWN_PROXY_TOKEN={value}"));
+        let plugin_config = ContainerCreateBody {
+            image: Some(policy.plugin.image_id.clone()),
+            user: Some("10002:10002".to_string()),
+            working_dir: Some("/plugin".to_string()),
+            entrypoint: Some(policy.plugin.command.clone()),
+            env: Some(vec![
+                format!("AUDIODOWN_RPC_SOCKET={RPC_SOCKET}"),
+                "AUDIODOWN_NODE_SDK_PATH=/sdk/src/index.js".to_string(),
+                format!("AUDIODOWN_PROXY_URL={}", policy.plugin.proxy_url),
+                proxy_token,
+                "NODE_ENV=production".to_string(),
+            ]),
+            labels: Some(policy.plugin.labels.clone()),
+            network_disabled: Some(false),
+            attach_stdout: Some(false),
+            attach_stderr: Some(false),
+            open_stdin: Some(false),
+            tty: Some(false),
+            host_config: Some(HostConfig {
+                memory: Some(policy.plugin.memory_bytes),
+                memory_swap: Some(policy.plugin.memory_bytes),
+                nano_cpus: Some(policy.plugin.nano_cpus),
+                pids_limit: Some(policy.plugin.pids_limit),
+                binds: Some(policy.plugin.mounts.clone()),
+                network_mode: Some(policy.plugin.network_name.clone()),
+                privileged: Some(policy.plugin.privileged),
+                publish_all_ports: Some(false),
+                readonly_rootfs: Some(policy.plugin.read_only),
+                cap_add: Some(policy.plugin.cap_add.clone()),
+                cap_drop: Some(policy.plugin.cap_drop.clone()),
+                security_opt: Some(policy.plugin.security_opt.clone()),
+                tmpfs: Some(plugin_tmpfs),
+                dns: Some(policy.plugin.dns.clone()),
+                init: Some(true),
+                auto_remove: Some(false),
+                ..Default::default()
+            }),
+            networking_config: Some(networking_config(
+                &policy.plugin.network_name,
+                vec![policy.plugin.container_name.clone()],
+            )),
+            ..Default::default()
+        };
+        let plugin = self
+            .docker
+            .create_container(
+                Some(
+                    CreateContainerOptionsBuilder::new()
+                        .name(&policy.plugin.container_name)
+                        .build(),
+                ),
+                plugin_config,
+            )
+            .await?;
+        self.docker
+            .start_container(
+                &plugin.id,
+                None::<bollard::query_parameters::StartContainerOptions>,
+            )
+            .await?;
+        self.wait_for_handshake(&plugin.id, &policy.plugin.plugin_id, plugin_version)
+            .await?;
+        let logs = self.plugin_logs_by_container(&plugin.id).await?;
+        Ok(StartedPlugin {
+            container_id: plugin.id,
+            logs,
+        })
+    }
+
+    async fn cleanup_runtime_resources(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<RuntimeCleanup, DockerAdapterError> {
+        let names = RuntimeResourceNames::for_plugin(plugin_id);
+        let mut cleanup = RuntimeCleanup::default();
+        let mut failed = false;
+
+        match self.find_managed_container(plugin_id).await {
+            Ok(Some(container_id)) => {
+                cleanup.plugin_container_id = Some(container_id.clone());
+                if self.remove_runtime_container(&container_id).await.is_err() {
+                    failed = true;
+                }
+            }
+            Ok(None) => {}
+            Err(_) => failed = true,
+        }
+        match self
+            .find_managed_container_by_resource(plugin_id, "gateway")
+            .await
+        {
+            Ok(Some(container_id)) => {
+                if self.remove_runtime_container(&container_id).await.is_err() {
+                    failed = true;
+                }
+            }
+            Ok(None) => {}
+            Err(_) => failed = true,
+        }
+        match self.remove_managed_network(plugin_id, &names.network).await {
+            Ok(()) => {}
+            Err(_) => failed = true,
+        }
+        if failed {
+            Err(DockerAdapterError::RuntimeCleanupFailed)
+        } else {
+            Ok(cleanup)
+        }
+    }
+
+    async fn remove_runtime_container(&self, container_id: &str) -> Result<(), DockerAdapterError> {
+        match self
+            .docker
+            .remove_container(
+                container_id,
+                Some(
+                    RemoveContainerOptionsBuilder::new()
+                        .force(true)
+                        .v(true)
+                        .build(),
+                ),
+            )
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) if is_not_found(&error) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    async fn inspect_managed_network(
+        &self,
+        plugin_id: &PluginId,
+        network_name: &str,
+    ) -> Result<bool, DockerAdapterError> {
+        let network = match self
+            .docker
+            .inspect_network(
+                network_name,
+                None::<bollard::query_parameters::InspectNetworkOptions>,
+            )
+            .await
+        {
+            Ok(network) => network,
+            Err(error) if is_not_found(&error) => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        let labels = network.labels.unwrap_or_default();
+        verify_runtime_labels(&labels, &self.installation_id, plugin_id, "network")?;
+        Ok(network.internal == Some(true) && network.attachable == Some(false))
+    }
+
+    async fn remove_managed_network(
+        &self,
+        plugin_id: &PluginId,
+        network_name: &str,
+    ) -> Result<(), DockerAdapterError> {
+        if !self
+            .inspect_managed_network(plugin_id, network_name)
+            .await?
+        {
+            return Ok(());
+        }
+        match self.docker.remove_network(network_name).await {
+            Ok(()) => Ok(()),
+            Err(error) if is_not_found(&error) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     async fn verify_install_image(
@@ -546,6 +794,63 @@ impl DockerAdapter {
             .filter_map(parse_plugin_log)
             .collect())
     }
+}
+
+fn tmpfs_options(entries: &[String]) -> HashMap<String, String> {
+    entries
+        .iter()
+        .filter_map(|entry| entry.split_once(':'))
+        .map(|(path, options)| (path.to_string(), options.to_string()))
+        .collect()
+}
+
+fn networking_config(network_name: &str, aliases: Vec<String>) -> NetworkingConfig {
+    NetworkingConfig {
+        endpoints_config: Some(HashMap::from([(
+            network_name.to_string(),
+            EndpointSettings {
+                aliases: Some(aliases),
+                ..Default::default()
+            },
+        )])),
+    }
+}
+
+fn verify_managed_labels(
+    labels: &HashMap<String, String>,
+    installation_id: &str,
+    resource: &str,
+) -> Result<(), DockerAdapterError> {
+    if labels.get("io.audiodown.managed").map(String::as_str) != Some("true")
+        || labels.get("io.audiodown.installation").map(String::as_str) != Some(installation_id)
+        || labels.get("io.audiodown.resource").map(String::as_str) != Some(resource)
+    {
+        return Err(DockerAdapterError::LabelMismatch);
+    }
+    Ok(())
+}
+
+fn verify_runtime_labels(
+    labels: &HashMap<String, String>,
+    installation_id: &str,
+    plugin_id: &PluginId,
+    resource: &str,
+) -> Result<(), DockerAdapterError> {
+    verify_managed_labels(labels, installation_id, resource)?;
+    if labels.get("io.audiodown.plugin-id").map(String::as_str) != Some(plugin_id.as_str()) {
+        return Err(DockerAdapterError::LabelMismatch);
+    }
+    Ok(())
+}
+
+fn is_not_found(error: &bollard::errors::Error) -> bool {
+    matches!(
+        error,
+        bollard::errors::Error::DockerResponseServerError {
+            status_code: 404,
+            ..
+        }
+    )
 }
 
 pub fn build_content_rpc_exec(
@@ -823,6 +1128,8 @@ pub enum DockerAdapterError {
     RemovalAttestationMismatch,
     #[error("managed install directory is unsafe")]
     UnsafeInstallDirectory,
+    #[error("paired plugin runtime cleanup failed")]
+    RuntimeCleanupFailed,
     #[error("plugin handshake failed: {0}")]
     Handshake(String),
     #[error("plugin is not running")]
