@@ -66,7 +66,7 @@ impl CredentialRepository for SqliteVaultRepository {
         let record = stored_to_record(record)?;
         self.storage
             .credentials()
-            .upsert(&record)
+            .update(&record)
             .await
             .map_err(map_repository_error)
     }
@@ -464,7 +464,6 @@ where
         if let Some(service) = services.get(&key) {
             return Ok(Arc::clone(service));
         }
-        services.retain(|(plugin_id, _), _| plugin_id != &plugin.plugin_id);
         let service = Arc::new(CredentialProxyService::new(
             HttpProxy::new(
                 ProxyPolicy::production(&plugin.manifest),

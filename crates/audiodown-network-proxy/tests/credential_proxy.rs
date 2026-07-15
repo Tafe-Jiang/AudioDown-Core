@@ -532,6 +532,71 @@ async fn rejects_secret_reflection_in_redirect_location_before_following_it() {
     assert_eq!(transport.seen().len(), 1);
 }
 
+#[tokio::test]
+async fn rejects_new_terminal_cookie_reflected_in_visible_header() {
+    const TERMINAL_COOKIE: &str = "terminal-cookie-header-canary";
+    let vault = TestVault::new();
+    let mut reflected = response_with_set_cookie(
+        &format!("terminal={TERMINAL_COOKIE}; Path=/"),
+        b"safe".to_vec(),
+    );
+    reflected.headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; canary=terminal-cookie-header-canary"),
+    );
+    let transport = ScriptedTransport::with_responses([reflected]);
+    let service = service(transport.clone(), vault, TestGrants::new(None));
+    let plugin = credential_plugin(ORIGIN);
+    let session = service
+        .create_login_jar(
+            &plugin,
+            scope(),
+            origins(&[ORIGIN]),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .execute(&plugin, jar_request(session, "/terminal-header"))
+            .await,
+        Err(CredentialProxyError::DirectReflection)
+    );
+    assert_eq!(transport.seen().len(), 1);
+}
+
+#[tokio::test]
+async fn rejects_new_terminal_cookie_reflected_in_decoded_body() {
+    const TERMINAL_COOKIE: &str = "terminal-cookie-body-canary";
+    let vault = TestVault::new();
+    let mut reflected = response_with_set_cookie(
+        &format!("terminal={TERMINAL_COOKIE}; Path=/"),
+        gzip(format!("prefix {TERMINAL_COOKIE} suffix").as_bytes()),
+    );
+    reflected
+        .headers
+        .insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    let transport = ScriptedTransport::with_responses([reflected]);
+    let service = service(transport.clone(), vault, TestGrants::new(None));
+    let plugin = credential_plugin(ORIGIN);
+    let session = service
+        .create_login_jar(
+            &plugin,
+            scope(),
+            origins(&[ORIGIN]),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .execute(&plugin, jar_request(session, "/terminal-body"))
+            .await,
+        Err(CredentialProxyError::DirectReflection)
+    );
+    assert_eq!(transport.seen().len(), 1);
+}
+
 #[derive(Clone, Default)]
 struct ScriptedTransport {
     responses: Arc<Mutex<VecDeque<TransportResponse>>>,

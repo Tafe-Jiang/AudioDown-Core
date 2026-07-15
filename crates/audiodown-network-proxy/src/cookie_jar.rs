@@ -54,7 +54,7 @@ impl fmt::Debug for CookieJarSessionId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_tuple("CookieJarSessionId")
-            .field(&self.0)
+            .field(&"[REDACTED]")
             .finish()
     }
 }
@@ -332,6 +332,17 @@ impl TemporaryCookieJars {
         response_url: &Url,
         headers: &HeaderMap,
     ) -> Result<(), CookieJarError> {
+        self.capture_response_with_markers(id, binding, response_url, headers)
+            .map(drop)
+    }
+
+    pub(crate) fn capture_response_with_markers(
+        &self,
+        id: &CookieJarSessionId,
+        binding: &CookieJarBinding,
+        response_url: &Url,
+        headers: &HeaderMap,
+    ) -> Result<Vec<Zeroizing<Vec<u8>>>, CookieJarError> {
         let mut sessions = self.lock_sessions()?;
         let session = live_session(&mut sessions, id)?;
         ensure_binding(session, binding)?;
@@ -339,6 +350,7 @@ impl TemporaryCookieJars {
         ensure_origin(binding, response_url)?;
 
         let mut updated = session.store.clone();
+        let mut markers = Vec::new();
         for value in headers.get_all(header::SET_COOKIE) {
             let value = value.to_str().map_err(|_| CookieJarError::InvalidCookie)?;
             let raw =
@@ -351,10 +363,11 @@ impl TemporaryCookieJars {
                 Ok(_) | Err(CookieError::Expired) => {}
                 Err(_) => return Err(CookieJarError::InvalidCookie),
             }
+            markers.extend(cookie_secret_markers(&raw));
         }
         enforce_store_limits(&updated)?;
         session.store = updated;
-        Ok(())
+        Ok(markers)
     }
 
     pub fn cookie_header(
@@ -585,6 +598,25 @@ fn reject_public_suffix(raw: &RawCookie<'_>) -> Result<(), CookieJarError> {
     } else {
         Ok(())
     }
+}
+
+fn cookie_secret_markers(raw: &RawCookie<'_>) -> Vec<Zeroizing<Vec<u8>>> {
+    let mut markers = Vec::new();
+    let value = raw.value();
+    if !value.is_empty() {
+        markers.push(Zeroizing::new(value.as_bytes().to_vec()));
+
+        let mut pair = Zeroizing::new(Vec::with_capacity(raw.name().len() + value.len() + 1));
+        pair.extend_from_slice(raw.name().as_bytes());
+        pair.push(b'=');
+        pair.extend_from_slice(value.as_bytes());
+        markers.push(pair);
+    }
+    let trimmed = raw.value_trimmed();
+    if !trimmed.is_empty() && trimmed != value {
+        markers.push(Zeroizing::new(trimmed.as_bytes().to_vec()));
+    }
+    markers
 }
 
 fn enforce_store_limits(store: &CookieStore) -> Result<(), CookieJarError> {

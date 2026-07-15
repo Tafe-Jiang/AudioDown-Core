@@ -30,6 +30,10 @@ use tokio::{
 use uuid::Uuid;
 
 pub const MAX_PROXY_FRAME_BYTES: usize = 1024 * 1024;
+const MIN_SUCCESS_RESPONSE_BYTES: usize =
+    br#"{"status":200,"headers":{},"bodyBase64":"","error":null}"#.len();
+const MAX_PROXY_RESPONSE_BODY_BYTES: usize =
+    ((MAX_PROXY_FRAME_BYTES - MIN_SUCCESS_RESPONSE_BYTES) / 4) * 3;
 const MAX_TOKEN_BYTES: usize = 4 * 1024;
 const MAX_REQUEST_ID_BYTES: usize = 256;
 const MAX_URL_BYTES: usize = 8 * 1024;
@@ -268,7 +272,7 @@ pub enum ProxyAuthError {
     Unauthorized,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CoreProxyRequest {
     pub request_id: String,
     pub method: Method,
@@ -279,11 +283,36 @@ pub struct CoreProxyRequest {
     pub credential_scope: Option<CredentialScope>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl fmt::Debug for CoreProxyRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CoreProxyRequest")
+            .field("request_id_bytes", &self.request_id.len())
+            .field("method", &self.method)
+            .field("header_count", &self.headers.len())
+            .field("body_bytes", &self.body.len())
+            .field("uses_cookie_jar", &self.cookie_jar_session_id.is_some())
+            .field("uses_credential", &self.credential_scope.is_some())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct CoreProxyResponse {
     status: StatusCode,
     headers: HeaderMap,
     body: Vec<u8>,
+}
+
+impl fmt::Debug for CoreProxyResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CoreProxyResponse")
+            .field("status", &self.status)
+            .field("header_count", &self.headers.len())
+            .field("body_bytes", &self.body.len())
+            .finish()
+    }
 }
 
 impl CoreProxyResponse {
@@ -472,9 +501,16 @@ async fn dispatch_frame(
             )
         }
     };
+    if wire.has_missing_nullable_field() {
+        return WireResponse::error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_REQUEST",
+            "Proxy request was invalid",
+        );
+    }
     let runtime = match wire
         .token
-        .as_deref()
+        .as_present()
         .ok_or(ProxyAuthError::Unauthorized)
         .and_then(|token| registry.authenticate(token))
     {
@@ -498,13 +534,19 @@ async fn dispatch_frame(
         }
     };
     match backend.execute(&runtime, request).await {
-        Ok(response) => WireResponse::from_core(response).unwrap_or_else(|_| {
-            WireResponse::error(
+        Ok(response) => match WireResponse::from_core(response) {
+            Ok(response) => response,
+            Err(WireResponseError::TooLarge) => WireResponse::error(
+                StatusCode::BAD_GATEWAY,
+                "MESSAGE_TOO_LARGE",
+                "Proxy response exceeded the message limit",
+            ),
+            Err(WireResponseError::Invalid) => WireResponse::error(
                 StatusCode::BAD_GATEWAY,
                 "PROXY_RESPONSE_REJECTED",
                 "Proxy response was rejected",
-            )
-        }),
+            ),
+        },
         Err(error) => map_backend_error(error),
     }
 }
@@ -612,15 +654,57 @@ enum FrameReadError {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WireRequest {
-    token: Option<String>,
+    #[serde(default)]
+    token: RequiredNullable<String>,
     request_id: String,
     method: String,
     url: String,
     #[serde(deserialize_with = "deserialize_headers")]
     headers: HashMap<String, String>,
-    body_base64: Option<String>,
-    cookie_jar_session_id: Option<String>,
-    credential_scope: Option<String>,
+    #[serde(default)]
+    body_base64: RequiredNullable<String>,
+    #[serde(default)]
+    cookie_jar_session_id: RequiredNullable<String>,
+    #[serde(default)]
+    credential_scope: RequiredNullable<String>,
+}
+
+struct RequiredNullable<T>(Option<Option<T>>);
+
+impl<T> Default for RequiredNullable<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<'de, T> Deserialize<'de> for RequiredNullable<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<T>::deserialize(deserializer).map(|value| Self(Some(value)))
+    }
+}
+
+impl<T> RequiredNullable<T> {
+    fn is_missing(&self) -> bool {
+        self.0.is_none()
+    }
+
+    fn is_present(&self) -> bool {
+        matches!(self.0, Some(Some(_)))
+    }
+
+    fn as_present(&self) -> Option<&T> {
+        self.0.as_ref().and_then(Option::as_ref)
+    }
+
+    fn into_present(self) -> Result<Option<T>, ()> {
+        self.0.ok_or(())
+    }
 }
 
 fn deserialize_headers<'de, D>(deserializer: D) -> Result<HashMap<String, String>, D::Error>
@@ -656,6 +740,13 @@ where
 }
 
 impl WireRequest {
+    fn has_missing_nullable_field(&self) -> bool {
+        self.token.is_missing()
+            || self.body_base64.is_missing()
+            || self.cookie_jar_session_id.is_missing()
+            || self.credential_scope.is_missing()
+    }
+
     fn into_core_request(self) -> Result<CoreProxyRequest, ()> {
         if self.request_id.is_empty()
             || self.request_id.len() > MAX_REQUEST_ID_BYTES
@@ -663,7 +754,7 @@ impl WireRequest {
             || self.url.is_empty()
             || self.url.len() > MAX_URL_BYTES
             || self.headers.len() > MAX_REQUEST_HEADERS
-            || (self.cookie_jar_session_id.is_some() && self.credential_scope.is_some())
+            || (self.cookie_jar_session_id.is_present() && self.credential_scope.is_present())
         {
             return Err(());
         }
@@ -709,7 +800,7 @@ impl WireRequest {
             let value = HeaderValue::from_str(&raw_value).map_err(|_| ())?;
             headers.insert(name, value);
         }
-        let body = match self.body_base64 {
+        let body = match self.body_base64.into_present()? {
             Some(encoded) => {
                 let decoded = general_purpose::STANDARD.decode(&encoded).map_err(|_| ())?;
                 if general_purpose::STANDARD.encode(&decoded) != encoded {
@@ -721,11 +812,13 @@ impl WireRequest {
         };
         let cookie_jar_session_id = self
             .cookie_jar_session_id
+            .into_present()?
             .map(CookieJarSessionId::parse)
             .transpose()
             .map_err(|_| ())?;
         let credential_scope = self
             .credential_scope
+            .into_present()?
             .map(CredentialScope::parse)
             .transpose()
             .map_err(|_| ())?;
@@ -773,12 +866,18 @@ struct WireResponse {
 }
 
 impl WireResponse {
-    fn from_core(response: CoreProxyResponse) -> Result<Self, ()> {
+    fn from_core(response: CoreProxyResponse) -> Result<Self, WireResponseError> {
+        if response.body.len() > MAX_PROXY_RESPONSE_BODY_BYTES {
+            return Err(WireResponseError::TooLarge);
+        }
         let mut headers = HashMap::new();
         for (name, value) in &response.headers {
-            let value = value.to_str().map_err(|_| ())?.to_string();
+            let value = value
+                .to_str()
+                .map_err(|_| WireResponseError::Invalid)?
+                .to_string();
             if headers.insert(name.as_str().to_string(), value).is_some() {
-                return Err(());
+                return Err(WireResponseError::Invalid);
             }
         }
         Ok(Self {
@@ -801,6 +900,12 @@ impl WireResponse {
             }),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WireResponseError {
+    Invalid,
+    TooLarge,
 }
 
 #[derive(Serialize)]

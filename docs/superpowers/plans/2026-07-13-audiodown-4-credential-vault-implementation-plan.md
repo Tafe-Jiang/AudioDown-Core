@@ -601,6 +601,10 @@ git commit -m "阶段4：实现临时 Cookie Jar" \
 - Modify: `crates/audiodown-server/Cargo.toml`
 - Create: `crates/audiodown-server/tests/proxy_gateway.rs`
 - Modify: `crates/audiodown-network-proxy/src/cookie_jar.rs`
+- Modify: `crates/audiodown-network-proxy/src/service.rs`
+- Modify: `crates/audiodown-network-proxy/tests/credential_proxy.rs`
+- Modify: `crates/audiodown-storage/src/credential_repository.rs`
+- Modify: `crates/audiodown-storage/tests/credentials.rs`
 - Modify: `Cargo.lock`
 
 Design correction: the Node SDK sends the opaque Cookie Jar session ID over the
@@ -639,6 +643,64 @@ git add Cargo.lock crates/audiodown-server crates/audiodown-network-proxy/src/co
 git commit -m "阶段4：开放受认证代理后端" \
   -m "使用临时运行令牌将代理请求绑定到可信插件身份。"
 ```
+
+Independent security review correction: the first implementation commit exposed
+six defects within the Task 12 boundary. Before Task 12 can be marked complete,
+add regressions for terminal-response Cookie reflection, sensitive Debug output,
+missing nullable wire fields, delete/update credential races, manifest-cache
+rollback, and pre-encoding frame limits. Confirm each regression fails against
+the first implementation, then make the minimum production fixes.
+
+- [x] **Step 6: Write and confirm failing security regressions**
+
+```bash
+cargo test -p audiodown-server --test proxy_gateway --locked
+cargo test -p audiodown-network-proxy --test credential_proxy --locked
+cargo test -p audiodown-storage --test credentials --locked
+```
+
+- [x] **Step 7: Implement the minimum review fixes**
+
+Include newly accepted Cookie values in the current hop's zeroized secret
+markers before validating terminal response headers and bodies; provide
+metadata-only redacted Debug implementations; distinguish missing nullable wire
+fields from explicit `null`; add transactionally update-only credential CAS;
+retain proxy services by full `(plugin_id, manifest_hash)` identity; and reject
+bodies that cannot fit the wire frame before base64 or JSON allocation.
+
+- [x] **Step 8: Run focused and regression checks**
+
+```bash
+cargo test -p audiodown-server --test proxy_gateway --locked
+cargo test -p audiodown-server --locked
+cargo test -p audiodown-network-proxy --locked
+cargo test -p audiodown-storage --locked
+cargo clippy -p audiodown-server --all-targets --locked -- -D warnings
+cargo check --workspace --all-targets --locked
+cargo fmt --all -- --check
+git diff --check
+```
+
+- [x] **Step 9: Commit the security review fixes**
+
+```bash
+git add Cargo.lock \
+  crates/audiodown-server \
+  crates/audiodown-network-proxy/src/cookie_jar.rs \
+  crates/audiodown-network-proxy/src/service.rs \
+  crates/audiodown-network-proxy/tests/credential_proxy.rs \
+  crates/audiodown-storage/src/credential_repository.rs \
+  crates/audiodown-storage/tests/credentials.rs \
+  docs/superpowers/plans/2026-07-13-audiodown-4-credential-vault-implementation-plan.md
+git commit -m "阶段4：修复代理后端安全审查问题" \
+  -m "封堵秘密反射、协议缺字段、并发更新和缓存倒退风险。"
+```
+
+- [ ] **Step 10: Obtain an independent clean review**
+
+Regenerate the Task 12 review package from the last accepted Task 11 progress
+commit through the repair commit. Task 12 remains incomplete until an
+independent reviewer returns `Approved` with no Critical or Important findings.
 
 ### Task 13: Isolate Plugins Behind the Fixed Gateway
 

@@ -362,21 +362,27 @@ where
         state: &Self::HopState,
         response: &TransportResponse,
     ) -> Result<(), HttpHookError> {
-        for (name, value) in &response.headers {
-            if name != header::SET_COOKIE && state.contains(value.as_bytes()) {
-                return self.reject(CredentialProxyError::DirectReflection);
-            }
-        }
         if let HookMode::Jar {
             session_id,
             binding,
         } = &self.mode
         {
-            if let Err(error) =
-                self.jars
-                    .capture_response(session_id, binding, target.url(), &response.headers)
-            {
-                return self.reject(map_jar_error(error));
+            let markers = match self.jars.capture_response_with_markers(
+                session_id,
+                binding,
+                target.url(),
+                &response.headers,
+            ) {
+                Ok(markers) => markers,
+                Err(error) => return self.reject(map_jar_error(error)),
+            };
+            if let Err(error) = state.add_markers(markers) {
+                return self.reject(error);
+            }
+        }
+        for (name, value) in &response.headers {
+            if name != header::SET_COOKIE && state.contains(value.as_bytes()) {
+                return self.reject(CredentialProxyError::DirectReflection);
             }
         }
         Ok(())
@@ -402,12 +408,14 @@ where
 }
 
 struct HopSecretState {
-    markers: Vec<Zeroizing<Vec<u8>>>,
+    markers: Mutex<Vec<Zeroizing<Vec<u8>>>>,
 }
 
 impl HopSecretState {
     fn empty() -> Self {
-        Self { markers: vec![] }
+        Self {
+            markers: Mutex::new(vec![]),
+        }
     }
 
     fn from_cookie_header(value: &HeaderValue) -> Result<Self, CredentialProxyError> {
@@ -436,14 +444,34 @@ impl HopSecretState {
         markers.sort();
         markers.dedup();
         Self {
-            markers: markers.into_iter().map(Zeroizing::new).collect(),
+            markers: Mutex::new(markers.into_iter().map(Zeroizing::new).collect()),
         }
     }
 
+    fn add_markers(&self, additions: Vec<Zeroizing<Vec<u8>>>) -> Result<(), CredentialProxyError> {
+        let mut markers = self
+            .markers
+            .lock()
+            .map_err(|_| CredentialProxyError::SecretUnavailable)?;
+        for marker in additions {
+            if marker.is_empty()
+                || markers
+                    .iter()
+                    .any(|existing| existing.as_slice() == marker.as_slice())
+            {
+                continue;
+            }
+            markers.push(marker);
+        }
+        Ok(())
+    }
+
     fn contains(&self, haystack: &[u8]) -> bool {
-        self.markers
-            .iter()
-            .any(|marker| contains_subslice(haystack, marker))
+        self.markers.lock().map_or(true, |markers| {
+            markers
+                .iter()
+                .any(|marker| contains_subslice(haystack, marker))
+        })
     }
 }
 

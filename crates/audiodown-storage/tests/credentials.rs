@@ -375,6 +375,43 @@ async fn concurrent_revision_updates_return_one_success_and_one_conflict(
 }
 
 #[tokio::test]
+async fn update_only_cas_distinguishes_stale_from_deleted_records(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_temporary, _database_path, _database_url, storage) = migrated_file_storage().await?;
+    let owner = PluginId::parse("com.audiodown.virtual.update-only")?;
+    storage
+        .plugins()
+        .upsert(&plugin_record(
+            &owner,
+            PluginType::Credential,
+            "virtual",
+            "credential-manifest",
+        ))
+        .await?;
+    let record = credential_record(&owner);
+    storage.credentials().insert(&record).await?;
+
+    let mut current = record.clone();
+    current.ciphertext = vec![0x71; 32];
+    current.updated_at = Utc::now();
+    current.revision = storage.credentials().update(&current).await?;
+    assert_eq!(current.revision, 2);
+
+    assert!(matches!(
+        storage.credentials().update(&record).await,
+        Err(StorageError::Conflict)
+    ));
+
+    storage.credentials().delete(&current.id).await?;
+    assert!(matches!(
+        storage.credentials().update(&current).await,
+        Err(StorageError::NotFound)
+    ));
+    assert!(storage.credentials().get(&current.id).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn malformed_rows_return_stable_errors_without_ciphertext(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (_temporary, _database_path, database_url, storage) = migrated_file_storage().await?;

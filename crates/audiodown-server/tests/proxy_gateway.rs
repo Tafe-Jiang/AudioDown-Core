@@ -1,4 +1,6 @@
 use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    cell::Cell,
     collections::VecDeque,
     io,
     net::{IpAddr, Ipv4Addr},
@@ -12,8 +14,8 @@ use std::{
 
 use async_trait::async_trait;
 use audiodown_credential_vault::{
-    CredentialCreateRequest, CredentialUpdateRequest, CredentialVault, MasterKey,
-    TokenCredentialSecret,
+    CredentialCreateRequest, CredentialRepository, CredentialRepositoryError,
+    CredentialUpdateRequest, CredentialVault, MasterKey, TokenCredentialSecret,
 };
 use audiodown_domain::{
     credential::{CredentialScope, CredentialStatus},
@@ -67,6 +69,68 @@ const HOST: &str = "api.proxy-fixture.invalid";
 const ORIGIN: &str = "https://api.proxy-fixture.invalid";
 const SCOPE: &str = "proxyfixture.web";
 const TOKEN_CANARY: &str = "task-12-token-canary-must-remain-secret";
+
+struct TrackingAllocator;
+
+thread_local! {
+    static TRACKED_ALLOCATION_THRESHOLD: Cell<Option<usize>> = const { Cell::new(None) };
+    static SAW_TRACKED_ALLOCATION: Cell<bool> = const { Cell::new(false) };
+}
+
+fn record_allocation(size: usize) {
+    let _ = TRACKED_ALLOCATION_THRESHOLD.try_with(|threshold| {
+        if threshold.get().is_some_and(|threshold| size >= threshold) {
+            let _ = SAW_TRACKED_ALLOCATION.try_with(|seen| seen.set(true));
+        }
+    });
+}
+
+unsafe impl GlobalAlloc for TrackingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        record_allocation(layout.size());
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        record_allocation(layout.size());
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(pointer, layout) }
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        record_allocation(new_size);
+        unsafe { System.realloc(pointer, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: TrackingAllocator = TrackingAllocator;
+
+struct AllocationTracker;
+
+impl AllocationTracker {
+    fn start(threshold: usize) -> Self {
+        SAW_TRACKED_ALLOCATION.with(|seen| seen.set(false));
+        TRACKED_ALLOCATION_THRESHOLD.with(|current| current.set(Some(threshold)));
+        Self
+    }
+
+    fn finish(self) -> bool {
+        TRACKED_ALLOCATION_THRESHOLD.with(|current| current.set(None));
+        let seen = SAW_TRACKED_ALLOCATION.with(Cell::get);
+        std::mem::forget(self);
+        seen
+    }
+}
+
+impl Drop for AllocationTracker {
+    fn drop(&mut self) {
+        let _ = TRACKED_ALLOCATION_THRESHOLD.try_with(|current| current.set(None));
+    }
+}
 
 #[test]
 fn registry_generates_256_bit_tokens_and_binds_current_runtime_generation() {
@@ -192,6 +256,63 @@ fn cookie_jar_wire_identity_requires_canonical_uuid() {
     }
 }
 
+#[test]
+fn authenticated_request_response_and_jar_debug_are_metadata_only() {
+    let jar_value = "b57a7b99-c5e4-48eb-bf0b-0769c4a30ca2";
+    let request_body = b"request-debug-body-canary".to_vec();
+    let request = CoreProxyRequest {
+        request_id: "debug-request-canary".to_string(),
+        method: Method::POST,
+        url: "https://debug-secret.invalid/private?token=url-canary".to_string(),
+        headers: HeaderMap::from_iter([(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("request-header-canary"),
+        )]),
+        body: request_body.clone(),
+        cookie_jar_session_id: Some(CookieJarSessionId::parse(jar_value).unwrap()),
+        credential_scope: None,
+    };
+    let rendered_request = format!("{request:?}");
+    for secret in [
+        "debug-request-canary",
+        "debug-secret.invalid",
+        "url-canary",
+        "request-header-canary",
+        jar_value,
+        &format!("{request_body:?}"),
+    ] {
+        assert!(
+            !rendered_request.contains(secret),
+            "request Debug leaked {secret}"
+        );
+    }
+    assert!(rendered_request.contains("header_count"));
+    assert!(rendered_request.contains("body_bytes"));
+
+    let response_body = b"response-debug-body-canary".to_vec();
+    let response = CoreProxyResponse::new(
+        StatusCode::OK,
+        HeaderMap::from_iter([(
+            header::SET_COOKIE,
+            HeaderValue::from_static("response-header-canary"),
+        )]),
+        response_body.clone(),
+    );
+    let rendered_response = format!("{response:?}");
+    for secret in ["response-header-canary", &format!("{response_body:?}")] {
+        assert!(
+            !rendered_response.contains(secret),
+            "response Debug leaked {secret}"
+        );
+    }
+    assert!(rendered_response.contains("header_count"));
+    assert!(rendered_response.contains("body_bytes"));
+
+    let rendered_jar = format!("{:?}", CookieJarSessionId::parse(jar_value).unwrap());
+    assert!(rendered_jar.contains("[REDACTED]"));
+    assert!(!rendered_jar.contains(jar_value));
+}
+
 #[tokio::test]
 async fn gateway_authenticates_before_dispatch_and_preserves_sdk_json_shape() {
     let fixture = GatewayFixture::start(FakeBackend::default(), test_limits()).await;
@@ -230,6 +351,104 @@ async fn gateway_authenticates_before_dispatch_and_preserves_sdk_json_shape() {
     );
 
     fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn gateway_requires_each_nullable_wire_field_but_accepts_explicit_null() {
+    let fixture = GatewayFixture::start(FakeBackend::default(), test_limits()).await;
+    let registration = fixture
+        .registry
+        .register(plugin_id(CONTENT_PLUGIN))
+        .unwrap();
+    let token = registration.token().with_value(str::to_owned);
+
+    let mut missing_results = Vec::new();
+    for field in [
+        "token",
+        "bodyBase64",
+        "cookieJarSessionId",
+        "credentialScope",
+    ] {
+        let mut request = request_frame(Some(&token));
+        request.as_object_mut().unwrap().remove(field);
+        let response = fixture.send(request).await;
+        missing_results.push((
+            field,
+            response["status"].as_u64().unwrap(),
+            response["error"]["code"].as_str().map(str::to_owned),
+        ));
+    }
+    assert_eq!(
+        missing_results,
+        vec![
+            ("token", 400, Some("INVALID_REQUEST".to_string())),
+            ("bodyBase64", 400, Some("INVALID_REQUEST".to_string())),
+            (
+                "cookieJarSessionId",
+                400,
+                Some("INVALID_REQUEST".to_string())
+            ),
+            ("credentialScope", 400, Some("INVALID_REQUEST".to_string())),
+        ]
+    );
+
+    assert_error(
+        &fixture.send(request_frame(None)).await,
+        401,
+        "PROXY_UNAUTHORIZED",
+    );
+    let accepted = fixture.send(request_frame(Some(&token))).await;
+    assert_eq!(accepted["status"], 200);
+    assert_eq!(fixture.backend.seen().len(), 1);
+
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn oversized_response_body_is_rejected_before_base64_or_json_allocation() {
+    let success_overhead = br#"{"status":200,"headers":{},"bodyBase64":"","error":null}"#.len();
+    let maximum_base64_bytes = ((MAX_PROXY_FRAME_BYTES - success_overhead) / 4) * 4;
+    let maximum_body_bytes = maximum_base64_bytes / 4 * 3;
+    let impossible_body_bytes = maximum_body_bytes + 1;
+    let impossible_base64_bytes = maximum_base64_bytes + 4;
+    let backend = LargeBodyBackend::new([
+        vec![b'a'; maximum_body_bytes],
+        vec![b'b'; impossible_body_bytes],
+    ]);
+    let temporary = tempdir().unwrap();
+    let path = temporary.path().join("proxy/core.sock");
+    let registry = Arc::new(ProxyTokenRegistry::new());
+    let gateway = ProxyGateway::bind_with_limits(
+        &path,
+        Arc::clone(&registry),
+        Arc::new(backend),
+        test_limits(),
+    )
+    .await
+    .unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let gateway_task = tokio::spawn(gateway.run(shutdown_rx));
+    let registration = registry.register(plugin_id(CONTENT_PLUGIN)).unwrap();
+    let token = registration.token().with_value(str::to_owned);
+
+    let boundary = send_to(&path, request_frame(Some(&token))).await;
+    assert_eq!(boundary["status"], 200);
+    assert_eq!(
+        boundary["bodyBase64"].as_str().unwrap().len(),
+        maximum_base64_bytes
+    );
+
+    let tracker = AllocationTracker::start(impossible_base64_bytes);
+    let rejected = send_to(&path, request_frame(Some(&token))).await;
+    let allocated_impossible_encoding = tracker.finish();
+    assert_error(&rejected, 502, "MESSAGE_TOO_LARGE");
+    assert!(
+        !allocated_impossible_encoding,
+        "gateway allocated an impossible full base64/JSON response before rejecting it"
+    );
+
+    shutdown_tx.send(true).unwrap();
+    gateway_task.await.unwrap().unwrap();
 }
 
 #[tokio::test]
@@ -598,6 +817,68 @@ async fn sqlite_backend_reloads_current_manifest_instead_of_reusing_stale_policy
 }
 
 #[tokio::test]
+async fn sqlite_backend_retains_services_by_complete_manifest_identity() {
+    let storage = migrated_storage().await;
+    let original = plugin_record(CONTENT_PLUGIN, PluginType::Content, "a".repeat(64));
+    storage.plugins().upsert(&original).await.unwrap();
+    let loader = SqliteInstalledPluginLoader::new(storage.clone());
+    let old_context = loader.load(&plugin_id(CONTENT_PLUGIN)).await.unwrap();
+
+    let mut replacement = plugin_record(CONTENT_PLUGIN, PluginType::Content, "b".repeat(64));
+    replacement.manifest_json["network"]["allowedHosts"] =
+        json!(["replacement.proxy-fixture.invalid"]);
+    storage.plugins().upsert(&replacement).await.unwrap();
+    let new_context = loader.load(&plugin_id(CONTENT_PLUGIN)).await.unwrap();
+
+    let repository = SqliteVaultRepository::new(storage.clone());
+    let vault = CredentialVault::new(master_key(), repository);
+    let resolver = StaticResolver::new([(HOST, vec![IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))])]);
+    let backend =
+        SqliteCoreProxyBackend::new(storage, vault, resolver, ScriptedTransport::default());
+    let original_service = backend.service_for(&old_context).unwrap();
+    let current_service = backend.service_for(&new_context).unwrap();
+
+    let delayed_original_service = backend.service_for(&old_context).unwrap();
+    let current_service_after_delay = backend.service_for(&new_context).unwrap();
+
+    assert!(Arc::ptr_eq(&original_service, &delayed_original_service));
+    assert!(Arc::ptr_eq(&current_service, &current_service_after_delay));
+}
+
+#[tokio::test]
+async fn sqlite_vault_delete_update_interleaving_cannot_recreate_revision_one() {
+    let storage = migrated_storage().await;
+    let owner = plugin_record(CREDENTIAL_PLUGIN, PluginType::Credential, "c".repeat(64));
+    storage.plugins().upsert(&owner).await.unwrap();
+    let repository = SqliteVaultRepository::new(storage.clone());
+    let vault = CredentialVault::new(master_key(), repository.clone());
+    let created = vault
+        .trusted()
+        .create_token(
+            CredentialCreateRequest {
+                platform_id: "proxyfixture".to_string(),
+                scope: scope(),
+                source_plugin_id: Some(plugin_id(CREDENTIAL_PLUGIN)),
+                target_origins: vec![origin(ORIGIN)],
+                account_id_hint: None,
+                display_name: None,
+                expires_at: None,
+            },
+            TokenCredentialSecret::bearer(SecretString::new(TOKEN_CANARY.to_string())).unwrap(),
+        )
+        .await
+        .unwrap();
+    let stale = repository.get(&created.id).await.unwrap().unwrap();
+
+    repository.delete(&created.id).await.unwrap();
+    assert!(matches!(
+        repository.update(&stale, stale.revision).await,
+        Err(CredentialRepositoryError::NotFound)
+    ));
+    assert!(repository.get(&created.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn core_router_exposes_no_proxy_http_route() {
     let storage = migrated_storage().await;
     let state = AppState::new(
@@ -680,6 +961,40 @@ impl CoreProxyBackend for FakeBackend {
                 HeaderValue::from_static("application/json"),
             )]),
             b"{}".to_vec(),
+        ))
+    }
+}
+
+#[derive(Clone)]
+struct LargeBodyBackend {
+    bodies: Arc<Mutex<VecDeque<Vec<u8>>>>,
+}
+
+impl LargeBodyBackend {
+    fn new(bodies: impl IntoIterator<Item = Vec<u8>>) -> Self {
+        Self {
+            bodies: Arc::new(Mutex::new(bodies.into_iter().collect())),
+        }
+    }
+}
+
+#[async_trait]
+impl CoreProxyBackend for LargeBodyBackend {
+    async fn execute(
+        &self,
+        _runtime: &AuthenticatedRuntime,
+        _request: CoreProxyRequest,
+    ) -> Result<CoreProxyResponse, CoreProxyBackendError> {
+        let body = self
+            .bodies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("scripted response body");
+        Ok(CoreProxyResponse::new(
+            StatusCode::OK,
+            HeaderMap::new(),
+            body,
         ))
     }
 }

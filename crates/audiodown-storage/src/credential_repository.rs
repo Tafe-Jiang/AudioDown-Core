@@ -141,55 +141,13 @@ impl<'a> CredentialRepository<'a> {
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         validate_source_plugin(&mut transaction, record).await?;
 
-        let result = sqlx::query(
-            r#"
-            UPDATE credentials
-            SET kind = ?, platform_id = ?, scope = ?, source_plugin_id = ?,
-                algorithm_version = ?, key_version = ?, nonce = ?, ciphertext = ?,
-                status = ?, account_id_hint = ?, display_name = ?,
-                safe_error_summary = ?, expires_at = ?, status_checked_at = ?,
-                record_revision = ?, updated_at = ?
-            WHERE id = ? AND record_revision = ?
-            "#,
-        )
-        .bind(credential_kind_to_str(record.kind))
-        .bind(&record.platform_id)
-        .bind(record.scope.as_str())
-        .bind(record.source_plugin_id.as_ref().map(PluginId::as_str))
-        .bind(i64::from(record.algorithm_version))
-        .bind(i64::from(record.key_version))
-        .bind(record.nonce.as_slice())
-        .bind(&record.ciphertext)
-        .bind(credential_status_to_str(record.status))
-        .bind(&record.account_id_hint)
-        .bind(&record.display_name)
-        .bind(&record.safe_error_summary)
-        .bind(record.expires_at.map(|timestamp| timestamp.to_rfc3339()))
-        .bind(
-            record
-                .status_checked_at
-                .map(|timestamp| timestamp.to_rfc3339()),
-        )
-        .bind(u64_to_i64(next_revision)?)
-        .bind(record.updated_at.to_rfc3339())
-        .bind(record.id.to_string())
-        .bind(u64_to_i64(record.revision)?)
-        .execute(&mut *transaction)
-        .await
-        .map_err(map_write_error)?;
-
-        if result.rows_affected() == 1 {
+        if update_credential_row(&mut transaction, record, next_revision).await? {
             replace_credential_origins(&mut transaction, record.id, &origins).await?;
             transaction.commit().await?;
             return Ok(next_revision);
         }
 
-        let exists: i64 =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credentials WHERE id = ?)")
-                .bind(record.id.to_string())
-                .fetch_one(&mut *transaction)
-                .await?;
-        if exists != 0 {
+        if credential_exists(&mut transaction, record.id).await? {
             return Err(StorageError::Conflict);
         }
         if record.revision != 1 {
@@ -200,6 +158,29 @@ impl<'a> CredentialRepository<'a> {
         replace_credential_origins(&mut transaction, record.id, &origins).await?;
         transaction.commit().await?;
         Ok(1)
+    }
+
+    pub async fn update(&self, record: &CredentialRecord) -> Result<u64, StorageError> {
+        validate_credential_record(record)?;
+        let origins = normalize_origins(&record.target_origins)?;
+        let next_revision = record
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| invalid_data("credential revision is invalid"))?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        validate_source_plugin(&mut transaction, record).await?;
+
+        if update_credential_row(&mut transaction, record, next_revision).await? {
+            replace_credential_origins(&mut transaction, record.id, &origins).await?;
+            transaction.commit().await?;
+            return Ok(next_revision);
+        }
+
+        if credential_exists(&mut transaction, record.id).await? {
+            Err(StorageError::Conflict)
+        } else {
+            Err(StorageError::NotFound)
+        }
     }
 
     pub async fn get(
@@ -553,6 +534,61 @@ async fn insert_credential(
     .await
     .map_err(map_write_error)?;
     Ok(())
+}
+
+async fn update_credential_row(
+    transaction: &mut Transaction<'_, Sqlite>,
+    record: &CredentialRecord,
+    next_revision: u64,
+) -> Result<bool, StorageError> {
+    let result = sqlx::query(
+        r#"
+        UPDATE credentials
+        SET kind = ?, platform_id = ?, scope = ?, source_plugin_id = ?,
+            algorithm_version = ?, key_version = ?, nonce = ?, ciphertext = ?,
+            status = ?, account_id_hint = ?, display_name = ?,
+            safe_error_summary = ?, expires_at = ?, status_checked_at = ?,
+            record_revision = ?, updated_at = ?
+        WHERE id = ? AND record_revision = ?
+        "#,
+    )
+    .bind(credential_kind_to_str(record.kind))
+    .bind(&record.platform_id)
+    .bind(record.scope.as_str())
+    .bind(record.source_plugin_id.as_ref().map(PluginId::as_str))
+    .bind(i64::from(record.algorithm_version))
+    .bind(i64::from(record.key_version))
+    .bind(record.nonce.as_slice())
+    .bind(&record.ciphertext)
+    .bind(credential_status_to_str(record.status))
+    .bind(&record.account_id_hint)
+    .bind(&record.display_name)
+    .bind(&record.safe_error_summary)
+    .bind(record.expires_at.map(|timestamp| timestamp.to_rfc3339()))
+    .bind(
+        record
+            .status_checked_at
+            .map(|timestamp| timestamp.to_rfc3339()),
+    )
+    .bind(u64_to_i64(next_revision)?)
+    .bind(record.updated_at.to_rfc3339())
+    .bind(record.id.to_string())
+    .bind(u64_to_i64(record.revision)?)
+    .execute(&mut **transaction)
+    .await
+    .map_err(map_write_error)?;
+    Ok(result.rows_affected() == 1)
+}
+
+async fn credential_exists(
+    transaction: &mut Transaction<'_, Sqlite>,
+    credential_id: CredentialId,
+) -> Result<bool, StorageError> {
+    let exists: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credentials WHERE id = ?)")
+        .bind(credential_id.to_string())
+        .fetch_one(&mut **transaction)
+        .await?;
+    Ok(exists != 0)
 }
 
 async fn validate_source_plugin(
