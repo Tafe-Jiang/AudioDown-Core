@@ -22,6 +22,7 @@ use semver::Version;
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, Semaphore};
+use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::{
@@ -36,6 +37,7 @@ const MAX_CONCURRENT_INSPECTIONS: usize = 2;
 const LIFECYCLE_RISK_KIND: &str = "npm_lifecycle_scripts";
 const DEFAULT_INSTALL_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const DEFAULT_INSTALL_WAIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const RUNTIME_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[async_trait]
 pub trait PluginStateStore: Send + Sync {
@@ -771,6 +773,80 @@ impl PluginManagerService {
         Ok(report)
     }
 
+    pub async fn cleanup_all_runtimes(
+        &self,
+    ) -> Result<RuntimeCleanupReport, PluginManagementError> {
+        let mut records = self
+            .state_store
+            .list_install_records()
+            .await
+            .map_err(|_| PluginManagementError::Internal)?;
+        records.sort_by(|left, right| left.plugin_id.as_str().cmp(right.plugin_id.as_str()));
+
+        let mut report = RuntimeCleanupReport {
+            scanned: records.len(),
+            ..RuntimeCleanupReport::default()
+        };
+        for record in records {
+            let plugin_id = record.plugin_id.clone();
+            match self.cleanup_runtime_for_record(record).await {
+                Ok(()) => report.cleaned += 1,
+                Err(error) => {
+                    report.failed += 1;
+                    report.failures.push(RuntimeCleanupFailure {
+                        plugin_id,
+                        message: error.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    async fn cleanup_runtime_for_record(
+        &self,
+        record: InstallPluginRecord,
+    ) -> Result<(), PluginManagementError> {
+        let plugin_id = record.plugin_id.clone();
+        let _operation_guard = self
+            .try_operation_lock(&plugin_id)
+            .map_err(map_management_lock_error)?;
+        if self.has_active_calls(&plugin_id) {
+            self.record_cleanup_failure(record).await;
+            return Err(PluginManagementError::PluginOperationInProgress);
+        }
+
+        let mut record = self.load_plugin(&plugin_id).await?;
+        let transition = timeout(RUNTIME_CLEANUP_TIMEOUT, self.stop_transition(&mut record))
+            .await
+            .map_err(|_| PluginManagementError::RuntimeUnavailable)?;
+        if let Err(error) = transition {
+            self.record_cleanup_failure(record).await;
+            return Err(error);
+        }
+        record.status = inactive_status(record.enabled);
+        self.state_store
+            .save_plugin(&record)
+            .await
+            .map_err(|_| PluginManagementError::Internal)
+    }
+
+    async fn record_cleanup_failure(&self, mut record: InstallPluginRecord) {
+        if !matches!(
+            record.status,
+            PluginStatus::Stopped | PluginStatus::Disabled
+        ) {
+            record.status = if record.enabled {
+                PluginStatus::Unhealthy
+            } else {
+                PluginStatus::Disabled
+            };
+        }
+        record.last_error = Some("plugin runtime action failed".to_string());
+        record.updated_at = Utc::now();
+        let _ = self.state_store.save_plugin(&record).await;
+    }
+
     async fn try_reconcile_plugin(
         &self,
         plugin_id: &PluginId,
@@ -859,24 +935,72 @@ impl PluginManagerService {
             .start(&record.plugin_id)
             .await
             .map_err(|_| PluginManagementError::RuntimeUnavailable)?;
-        self.validate_runtime(&started, &record.plugin_id)?;
-        self.persist_runtime_logs(record, &started).await?;
+        if let Err(error) = self.validate_runtime(&started, &record.plugin_id) {
+            return self.rollback_started_runtime(record, error).await;
+        }
+        if let Err(error) = self.persist_runtime_logs(record, &started).await {
+            return self.rollback_started_runtime(record, error).await;
+        }
 
         let inspected = self
             .runtime
             .inspect(&record.plugin_id)
             .await
-            .map_err(|_| PluginManagementError::RuntimeUnavailable)?;
-        self.validate_runtime(&inspected, &record.plugin_id)?;
-        if inspected.status != PluginStatus::Healthy {
-            return Err(PluginManagementError::InvalidRuntimeState);
+            .map_err(|_| PluginManagementError::RuntimeUnavailable);
+        let inspected = match inspected {
+            Ok(inspected) => inspected,
+            Err(error) => return self.rollback_started_runtime(record, error).await,
+        };
+        if let Err(error) = self.validate_runtime(&inspected, &record.plugin_id) {
+            return self.rollback_started_runtime(record, error).await;
         }
-        self.persist_runtime_logs(record, &inspected).await?;
+        if inspected.status != PluginStatus::Healthy {
+            return self
+                .rollback_started_runtime(record, PluginManagementError::InvalidRuntimeState)
+                .await;
+        }
+        if let Err(error) = self.persist_runtime_logs(record, &inspected).await {
+            return self.rollback_started_runtime(record, error).await;
+        }
         record.status = PluginStatus::Healthy;
         record.last_used_at = Some(Utc::now());
         record.last_error = None;
         record.updated_at = Utc::now();
         Ok(())
+    }
+
+    async fn rollback_started_runtime(
+        &self,
+        record: &mut InstallPluginRecord,
+        original_error: PluginManagementError,
+    ) -> Result<(), PluginManagementError> {
+        let cleanup = match self.runtime.stop(&record.plugin_id).await {
+            Ok(stopped) => match self.validate_runtime(&stopped, &record.plugin_id) {
+                Ok(()) if stopped.status == PluginStatus::Stopped => {
+                    record.status = inactive_status(record.enabled);
+                    record.updated_at = Utc::now();
+                    self.persist_runtime_logs(record, &stopped).await
+                }
+                Ok(()) => Err(PluginManagementError::InvalidRuntimeState),
+                Err(error) => Err(error),
+            },
+            Err(_) => Err(PluginManagementError::RuntimeUnavailable),
+        };
+        record.last_error = Some("plugin runtime action failed".to_string());
+        record.updated_at = Utc::now();
+        match cleanup {
+            Ok(()) => Err(original_error),
+            Err(cleanup_error) => {
+                if !matches!(
+                    record.status,
+                    PluginStatus::Stopped | PluginStatus::Disabled
+                ) && record.enabled
+                {
+                    record.status = PluginStatus::Unhealthy;
+                }
+                Err(cleanup_error)
+            }
+        }
     }
 
     async fn stop_transition(
@@ -892,10 +1016,10 @@ impl PluginManagerService {
         if stopped.status != PluginStatus::Stopped {
             return Err(PluginManagementError::InvalidRuntimeState);
         }
-        self.persist_runtime_logs(record, &stopped).await?;
-        record.status = PluginStatus::Stopped;
+        record.status = inactive_status(record.enabled);
         record.last_error = None;
         record.updated_at = Utc::now();
+        self.persist_runtime_logs(record, &stopped).await?;
         Ok(())
     }
 
@@ -1383,6 +1507,14 @@ impl PluginManagerService {
     }
 }
 
+fn inactive_status(enabled: bool) -> PluginStatus {
+    if enabled {
+        PluginStatus::Stopped
+    } else {
+        PluginStatus::Disabled
+    }
+}
+
 struct ActiveCallLease {
     active_calls: Arc<StdMutex<HashMap<PluginId, usize>>>,
     plugin_id: PluginId,
@@ -1510,6 +1642,20 @@ pub struct LifecycleReconcileReport {
     pub stopped: usize,
     pub skipped_busy: usize,
     pub failed: usize,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RuntimeCleanupReport {
+    pub scanned: usize,
+    pub cleaned: usize,
+    pub failed: usize,
+    pub failures: Vec<RuntimeCleanupFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCleanupFailure {
+    pub plugin_id: PluginId,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

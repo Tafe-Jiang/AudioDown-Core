@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Mutex};
 use async_trait::async_trait;
 use audiodown_domain::{
     log::{LogLevel, StructuredLog},
-    plugin::PluginId,
+    plugin::{PluginId, PluginStatus},
 };
 use audiodown_plugin_api::content::ContentMethod;
 use audiodown_plugin_manager::{
@@ -383,6 +383,28 @@ impl SupervisorPluginRuntime {
             .lock()
             .is_ok_and(|generations| generations.contains_key(plugin_id))
     }
+
+    fn current_generation(&self, plugin_id: &PluginId) -> Option<RuntimeGeneration> {
+        self.generations
+            .lock()
+            .ok()
+            .and_then(|generations| generations.get(plugin_id).copied())
+    }
+
+    async fn confirm_cleanup(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<PluginRuntimeState, PluginManagerError> {
+        let stopped = self
+            .client
+            .confirm_plugin_stopped(plugin_id)
+            .await
+            .map_err(runtime_error)?;
+        if stopped.plugin_id != *plugin_id || stopped.status != PluginStatus::Stopped {
+            return Err(PluginManagerError::RuntimeUnavailable);
+        }
+        Ok(stopped)
+    }
 }
 
 #[async_trait]
@@ -398,10 +420,7 @@ impl PluginRuntimeControl for SupervisorPluginRuntime {
                 .map_err(runtime_error);
         };
         if self.has_generation(plugin_id) {
-            self.client
-                .confirm_plugin_stopped(plugin_id)
-                .await
-                .map_err(runtime_error)?;
+            self.confirm_cleanup(plugin_id).await?;
             self.revoke_generation(plugin_id);
         }
         let registered = proxy_tokens
@@ -423,8 +442,9 @@ impl PluginRuntimeControl for SupervisorPluginRuntime {
         {
             Ok(state) => Ok(state),
             Err(error) => {
-                if self.client.confirm_plugin_stopped(plugin_id).await.is_ok() {
-                    self.revoke_if_current(plugin_id, generation);
+                match self.confirm_cleanup(plugin_id).await {
+                    Ok(_) => self.revoke_if_current(plugin_id, generation),
+                    Err(cleanup_error) => return Err(cleanup_error),
                 }
                 Err(runtime_error(error))
             }
@@ -439,6 +459,9 @@ impl PluginRuntimeControl for SupervisorPluginRuntime {
             .stop_plugin(plugin_id)
             .await
             .map_err(runtime_error)?;
+        if state.plugin_id != *plugin_id || state.status != PluginStatus::Stopped {
+            return Err(PluginManagerError::RuntimeUnavailable);
+        }
         self.revoke_generation(plugin_id);
         Ok(state)
     }
@@ -447,23 +470,42 @@ impl PluginRuntimeControl for SupervisorPluginRuntime {
         &self,
         plugin_id: &PluginId,
     ) -> Result<PluginRuntimeState, PluginManagerError> {
-        let state = self
-            .client
-            .inspect_plugin(plugin_id)
-            .await
-            .map_err(runtime_error)?;
-        if self.proxy_tokens.is_some()
-            && state.status == audiodown_domain::plugin::PluginStatus::Healthy
-            && !self.has_generation(plugin_id)
-        {
+        let lifecycle_lock = self.lifecycle_lock(plugin_id)?;
+        let _guard = lifecycle_lock.lock().await;
+        let Some(_) = &self.proxy_tokens else {
             return self
                 .client
-                .stop_plugin(plugin_id)
+                .inspect_plugin(plugin_id)
                 .await
                 .map_err(runtime_error);
+        };
+
+        let generation = self.current_generation(plugin_id);
+        let state = match self.client.inspect_plugin(plugin_id).await {
+            Ok(state) => state,
+            Err(error) => {
+                self.confirm_cleanup(plugin_id).await?;
+                if let Some(generation) = generation {
+                    self.revoke_if_current(plugin_id, generation);
+                }
+                return Err(runtime_error(error));
+            }
+        };
+        if state.plugin_id != *plugin_id {
+            self.confirm_cleanup(plugin_id).await?;
+            if let Some(generation) = generation {
+                self.revoke_if_current(plugin_id, generation);
+            }
+            return Err(PluginManagerError::RuntimeUnavailable);
         }
-        if state.status != audiodown_domain::plugin::PluginStatus::Healthy {
-            self.revoke_generation(plugin_id);
+        if state.status != PluginStatus::Healthy || generation.is_none() {
+            let stopped = self.confirm_cleanup(plugin_id).await?;
+            if let Some(generation) = generation {
+                self.revoke_if_current(plugin_id, generation);
+            }
+            if state.status == PluginStatus::Healthy {
+                return Ok(stopped);
+            }
         }
         Ok(state)
     }

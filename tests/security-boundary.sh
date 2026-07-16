@@ -122,6 +122,7 @@ network_name="$(
   docker inspect "$plugin_container" --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}'
 )"
 [ -n "$network_name" ] || fail "virtual plugin internal network is missing"
+network_id="$(docker network inspect --format '{{.Id}}' "$network_name")"
 gateway_network="$(
   docker inspect "$gateway_container" --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}'
 )"
@@ -293,7 +294,7 @@ if docker exec "$plugin_container" sh -c '
 fi
 if ! docker exec "$plugin_container" sh -c '
   for environment in /proc/[0-9]*/environ; do
-    tr "\0" "\n" <"$environment" 2>/dev/null || true
+    { cat "$environment" 2>/dev/null || true; } | tr "\0" "\n"
   done | grep -q "^AUDIODOWN_PROXY_TOKEN=."
 '; then
   fail "plugin process did not receive the runtime proxy token"
@@ -382,6 +383,62 @@ if ! docker exec "$plugin_container" node -e '
 '; then
   fail "virtual plugin can reach another plugin network"
 fi
+
+old_plugin_container="$plugin_container"
+old_gateway_container="$gateway_container"
+old_network_id="$network_id"
+docker restart "$core_container" >/dev/null
+
+attempt=1
+while [ "$attempt" -le 60 ]; do
+  system_json="$(curl --silent http://127.0.0.1:18080/api/v1/system || true)"
+  runtime_containers="$(
+    docker ps -aq \
+      --filter "label=io.audiodown.managed=true" \
+      --filter "label=io.audiodown.plugin-id=$plugin_id"
+  )"
+  if node -e '
+    try {
+      const system = JSON.parse(process.argv[1]);
+      process.exit(system.supervisor?.available === true ? 0 : 1);
+    } catch {
+      process.exit(1);
+    }
+  ' "$system_json" &&
+    [ -z "$runtime_containers" ] &&
+    ! docker inspect "$old_plugin_container" >/dev/null 2>&1 &&
+    ! docker inspect "$old_gateway_container" >/dev/null 2>&1 &&
+    ! docker network inspect "$old_network_id" >/dev/null 2>&1; then
+    break
+  fi
+  if [ "$attempt" -eq 60 ]; then
+    fail "Core startup cleanup did not remove the pre-restart plugin, Gateway, and internal network"
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+
+curl --fail --silent --request POST \
+  "http://127.0.0.1:18080/api/v1/plugins/$plugin_id/start" \
+  >/dev/null
+plugin_container="$(
+  docker ps -q \
+    --filter "label=io.audiodown.managed=true" \
+    --filter "label=io.audiodown.plugin-id=$plugin_id" \
+    --filter "label=io.audiodown.resource=plugin"
+)"
+[ -n "$plugin_container" ] || fail "virtual plugin container is missing after Core restart cleanup"
+gateway_container="$(
+  docker ps -q \
+    --filter "label=io.audiodown.managed=true" \
+    --filter "label=io.audiodown.plugin-id=$plugin_id" \
+    --filter "label=io.audiodown.resource=gateway"
+)"
+[ -n "$gateway_container" ] || fail "fixed plugin Gateway container is missing after Core restart cleanup"
+network_name="$(
+  docker inspect "$plugin_container" --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}'
+)"
+[ -n "$network_name" ] || fail "virtual plugin internal network is missing after Core restart cleanup"
 
 curl --fail --silent --request POST \
   "http://127.0.0.1:18080/api/v1/plugins/$plugin_id/stop" \

@@ -729,8 +729,12 @@ final frame fallback.
 - Modify: `crates/audiodown-supervisor-protocol/tests/contracts.rs`
 - Modify: `crates/audiodown-server/src/supervisor.rs`
 - Modify: `crates/audiodown-server/src/plugin_manager_adapters.rs`
+- Modify: `crates/audiodown-server/src/lib.rs`
 - Modify: `crates/audiodown-server/src/main.rs`
+- Create: `crates/audiodown-server/src/shutdown.rs`
 - Modify: `crates/audiodown-server/tests/supervisor_client.rs`
+- Modify: `crates/audiodown-plugin-manager/src/service.rs`
+- Modify: `crates/audiodown-plugin-manager/tests/management_service.rs`
 - Modify: `crates/audiodown-supervisor/src/config.rs`
 - Modify: `crates/audiodown-supervisor/src/policy.rs`
 - Modify: `crates/audiodown-supervisor/src/docker.rs`
@@ -746,6 +750,15 @@ that owns start/stop/revoke. Supervisor `server.rs` must pass the trusted typed
 start token from the authenticated protocol request into `DockerAdapter` and
 invoke the paired plugin/Gateway cleanup path. These are wiring changes only;
 they add no public HTTP inputs and do not expand Task 13 behavior.
+
+Final lifecycle correction: independent final-gate review found that the
+plugin-manager service is the direct owner of the `start -> inspect` health
+transaction and that Core process boundaries must order runtime cleanup before
+proxy registry shutdown. Task 13 therefore also owns the minimum manager
+rollback/cleanup changes, a testable Core shutdown-order helper, startup cleanup
+for resources left by a previous Core instance, and a real Core-only restart
+boundary assertion. These changes complete the existing lifecycle requirement;
+they add no plugin capability, public API, or Task 14 behavior.
 
 - [x] **Step 1: Write failing protocol and runtime-policy tests**
 
@@ -870,6 +883,40 @@ that requests keep-alive.
 
 - [x] Third-round keep-alive repair RED/GREEN completed.
 - [ ] Independent approval remains pending controller dispatch.
+
+**Final-gate lifecycle repair (after `9e5a691`):** Independent review confirmed
+the Gateway findings closed, then identified two remaining Task 13 lifecycle
+gaps: post-start health confirmation was not transactional, and Core restart or
+shutdown did not guarantee paired runtime cleanup before proxy token teardown.
+
+- [x] **Step 9e: Write and confirm final lifecycle regressions**
+
+Cover inspect errors and non-Healthy states after successful start, cleanup
+failure token preservation, continued and aggregated all-runtime cleanup,
+Gateway/work task early exits, and cleanup-before-Gateway shutdown ordering.
+
+- [x] **Step 9f: Implement transactional health and Core boundary cleanup**
+
+Roll back every failed post-start health confirmation through the keyed runtime
+stop path. On Core startup, clean resources left by the previous instance before
+serving requests. On graceful shutdown, quiesce HTTP and lifecycle work, wait for
+in-flight work, clean all runtimes, and only then stop the proxy Gateway so its
+registry is revoked after cleanup.
+
+- [x] **Step 9g: Run final Rust and real Docker verification**
+
+Run plugin-manager, Server, Supervisor, and Gateway tests and Clippy, workspace
+checks, Compose validation, and the real security script including a Core-only
+restart that removes the previous plugin, Gateway, and internal network.
+
+- [ ] **Step 9h: Commit and obtain independent approval**
+
+Commit with `阶段4：清理核心重启残留运行时`; Task 14 remains blocked until an
+independent review returns `Approved`.
+
+- [x] Final lifecycle Rust, Clippy, workspace, Compose, and Core-only restart
+  security verification completed on 2026-07-16.
+- [ ] Final lifecycle repair commit and independent approval remain pending.
 
 ### Task 14: Invoke Credential Plugins through the Supervisor
 

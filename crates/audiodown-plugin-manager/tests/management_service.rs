@@ -174,6 +174,131 @@ async fn runtime_failures_preserve_settings_and_record_redacted_errors() {
 }
 
 #[tokio::test]
+async fn start_inspection_error_runs_paired_stop_and_persists_stopped_failure() {
+    let fixture = Fixture::new();
+    fixture.runtime.fail_inspect();
+
+    assert_eq!(
+        fixture.service.start(&fixture.plugin_id).await.unwrap_err(),
+        PluginManagementError::RuntimeUnavailable
+    );
+    assert_eq!(fixture.runtime.events(), vec!["start", "inspect", "stop"]);
+    let record = fixture.store.record(&fixture.plugin_id).unwrap();
+    assert_eq!(record.status, PluginStatus::Stopped);
+    assert_eq!(
+        record.last_error.as_deref(),
+        Some("plugin runtime action failed")
+    );
+    assert!(fixture
+        .store
+        .runtime_logs()
+        .iter()
+        .all(|log| !log.message.contains("secret-token")));
+}
+
+#[tokio::test]
+async fn non_healthy_start_inspection_runs_paired_stop() {
+    let fixture = Fixture::new();
+    fixture.runtime.set_inspect_status(PluginStatus::Unhealthy);
+
+    assert_eq!(
+        fixture.service.start(&fixture.plugin_id).await.unwrap_err(),
+        PluginManagementError::InvalidRuntimeState
+    );
+    assert_eq!(fixture.runtime.events(), vec!["start", "inspect", "stop"]);
+    assert_eq!(
+        fixture.store.record(&fixture.plugin_id).unwrap().status,
+        PluginStatus::Stopped
+    );
+}
+
+#[tokio::test]
+async fn failed_start_cleanup_is_not_reported_as_healthy() {
+    let fixture = Fixture::new();
+    fixture.runtime.fail_inspect();
+    fixture.runtime.fail_stop();
+
+    assert_eq!(
+        fixture.service.start(&fixture.plugin_id).await.unwrap_err(),
+        PluginManagementError::RuntimeUnavailable
+    );
+    assert_eq!(fixture.runtime.events(), vec!["start", "inspect", "stop"]);
+    let record = fixture.store.record(&fixture.plugin_id).unwrap();
+    assert_ne!(record.status, PluginStatus::Healthy);
+    assert_eq!(
+        record.last_error.as_deref(),
+        Some("plugin runtime action failed")
+    );
+}
+
+#[tokio::test]
+async fn failed_start_cleanup_log_persistence_keeps_stopped_status() {
+    let fixture = Fixture::new();
+    fixture.runtime.fail_inspect();
+    fixture.store.fail_runtime_log_after(2);
+
+    assert_eq!(
+        fixture.service.start(&fixture.plugin_id).await.unwrap_err(),
+        PluginManagementError::Internal
+    );
+    assert_eq!(fixture.runtime.events(), vec!["start", "inspect", "stop"]);
+    let record = fixture.store.record(&fixture.plugin_id).unwrap();
+    assert_eq!(record.status, PluginStatus::Stopped);
+    assert_eq!(
+        record.last_error.as_deref(),
+        Some("plugin runtime action failed")
+    );
+}
+
+#[tokio::test]
+async fn cleanup_all_runtimes_continues_after_one_failure_and_aggregates_it() {
+    let fixture = Fixture::new();
+    let second_id = PluginId::parse("com.audiodown.virtual.second").unwrap();
+    let mut second = fixture.store.record(&fixture.plugin_id).unwrap();
+    second.plugin_id = second_id.clone();
+    second.status = PluginStatus::Healthy;
+    fixture.store.seed(second);
+    fixture.runtime.fail_stop_for(&fixture.plugin_id);
+
+    let report = fixture.service.cleanup_all_runtimes().await.unwrap();
+
+    assert_eq!(report.scanned, 2);
+    assert_eq!(report.cleaned, 1);
+    assert_eq!(report.failed, 1);
+    assert_eq!(fixture.runtime.events(), vec!["stop", "stop"]);
+    assert_ne!(
+        fixture.store.record(&fixture.plugin_id).unwrap().status,
+        PluginStatus::Healthy
+    );
+    assert_eq!(
+        fixture.store.record(&second_id).unwrap().status,
+        PluginStatus::Stopped
+    );
+    assert!(report
+        .failures
+        .iter()
+        .all(|failure| !failure.message.contains("secret-token")));
+}
+
+#[tokio::test]
+async fn cleanup_all_runtimes_keeps_stopped_status_after_log_persistence_failure() {
+    let fixture = Fixture::new();
+    fixture.store.fail_runtime_log_after(1);
+
+    let report = fixture.service.cleanup_all_runtimes().await.unwrap();
+
+    assert_eq!(report.scanned, 1);
+    assert_eq!(report.cleaned, 0);
+    assert_eq!(report.failed, 1);
+    let record = fixture.store.record(&fixture.plugin_id).unwrap();
+    assert_eq!(record.status, PluginStatus::Stopped);
+    assert_eq!(
+        record.last_error.as_deref(),
+        Some("plugin runtime action failed")
+    );
+}
+
+#[tokio::test]
 async fn uninstall_removes_runtime_assets_before_sqlite_and_preserves_failures() {
     let fixture = Fixture::new();
     fixture.service.uninstall(&fixture.plugin_id).await.unwrap();
@@ -306,6 +431,7 @@ struct FakeStore {
     records: Mutex<HashMap<PluginId, InstallPluginRecord>>,
     events: Mutex<Vec<String>>,
     runtime_logs: Mutex<Vec<PluginRuntimeLogRecord>>,
+    fail_runtime_log_after: Mutex<Option<usize>>,
 }
 
 impl FakeStore {
@@ -330,6 +456,10 @@ impl FakeStore {
 
     fn runtime_logs(&self) -> Vec<PluginRuntimeLogRecord> {
         self.runtime_logs.lock().unwrap().clone()
+    }
+
+    fn fail_runtime_log_after(&self, count: usize) {
+        *self.fail_runtime_log_after.lock().unwrap() = Some(count);
     }
 }
 
@@ -369,6 +499,14 @@ impl PluginStateStore for FakeStore {
         &self,
         record: &PluginRuntimeLogRecord,
     ) -> Result<(), PluginManagerError> {
+        let mut fail_after = self.fail_runtime_log_after.lock().unwrap();
+        if let Some(remaining) = fail_after.as_mut() {
+            *remaining = remaining.saturating_sub(1);
+            if *remaining == 0 {
+                *fail_after = None;
+                return Err(PluginManagerError::PluginStateUnavailable);
+            }
+        }
         self.runtime_logs.lock().unwrap().push(record.clone());
         Ok(())
     }
@@ -378,6 +516,10 @@ impl PluginStateStore for FakeStore {
 struct FakeRuntime {
     events: Mutex<Vec<&'static str>>,
     fail_start: AtomicBool,
+    fail_inspect: AtomicBool,
+    fail_stop: AtomicBool,
+    fail_stop_plugin: Mutex<Option<PluginId>>,
+    inspect_status: Mutex<Option<PluginStatus>>,
     fail_remove: AtomicBool,
     block_start: AtomicBool,
     start_entered: Notify,
@@ -391,6 +533,22 @@ impl FakeRuntime {
 
     fn fail_start(&self) {
         self.fail_start.store(true, Ordering::SeqCst);
+    }
+
+    fn fail_inspect(&self) {
+        self.fail_inspect.store(true, Ordering::SeqCst);
+    }
+
+    fn fail_stop(&self) {
+        self.fail_stop.store(true, Ordering::SeqCst);
+    }
+
+    fn fail_stop_for(&self, plugin_id: &PluginId) {
+        *self.fail_stop_plugin.lock().unwrap() = Some(plugin_id.clone());
+    }
+
+    fn set_inspect_status(&self, status: PluginStatus) {
+        *self.inspect_status.lock().unwrap() = Some(status);
     }
 
     fn fail_remove(&self) {
@@ -439,6 +597,16 @@ impl PluginRuntimeControl for FakeRuntime {
 
     async fn stop(&self, plugin_id: &PluginId) -> Result<PluginRuntimeState, PluginManagerError> {
         self.events.lock().unwrap().push("stop");
+        if self.fail_stop.swap(false, Ordering::SeqCst)
+            || self
+                .fail_stop_plugin
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|failed| failed == plugin_id)
+        {
+            return Err(PluginManagerError::RuntimeUnavailable);
+        }
         Ok(self.state(plugin_id, PluginStatus::Stopped))
     }
 
@@ -447,7 +615,16 @@ impl PluginRuntimeControl for FakeRuntime {
         plugin_id: &PluginId,
     ) -> Result<PluginRuntimeState, PluginManagerError> {
         self.events.lock().unwrap().push("inspect");
-        Ok(self.state(plugin_id, PluginStatus::Healthy))
+        if self.fail_inspect.swap(false, Ordering::SeqCst) {
+            return Err(PluginManagerError::RuntimeUnavailable);
+        }
+        Ok(self.state(
+            plugin_id,
+            self.inspect_status
+                .lock()
+                .unwrap()
+                .unwrap_or(PluginStatus::Healthy),
+        ))
     }
 
     async fn remove(&self, plugin_id: &PluginId) -> Result<PluginRemoveResult, PluginManagerError> {

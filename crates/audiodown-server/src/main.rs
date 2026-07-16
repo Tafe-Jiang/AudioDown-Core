@@ -13,6 +13,10 @@ use audiodown_server::{
     },
     proxy_adapters::{SqliteCoreProxyBackend, SqliteVaultRepository},
     proxy_gateway::{CoreProxyBackend, ProxyGateway, ProxyTokenRegistry},
+    shutdown::{
+        finish_ordered_shutdown, wait_for_core_task_exit, CoreTaskExit, ShutdownOrder,
+        ShutdownPhase,
+    },
     state::{AppState, DevelopmentConfig, ProxyRuntimeState},
     supervisor::UnixSupervisorClient,
 };
@@ -75,6 +79,14 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(ConfiguredLifecycleRiskAuthorizer::new(development.clone())),
         ),
     );
+    let startup_cleanup = plugin_manager.cleanup_all_runtimes().await?;
+    if startup_cleanup.failed > 0 {
+        anyhow::bail!(
+            "Core startup runtime cleanup failed for {} of {} plugins",
+            startup_cleanup.failed,
+            startup_cleanup.scanned
+        );
+    }
     if let Err(error) = plugin_manager.reconcile_install_operations().await {
         tracing::warn!(error = %error, "Plugin install reconciliation will retry on next startup");
     }
@@ -84,29 +96,26 @@ async fn main() -> anyhow::Result<()> {
         semver::Version::parse(env!("CARGO_PKG_VERSION"))?,
         supervisor,
     )
-    .with_plugin_manager(plugin_manager)
+    .with_plugin_manager(plugin_manager.clone())
     .with_development(development.enabled, development.token)
     .with_proxy_runtime(proxy_runtime);
     let app = build_router(state);
     let listener = TcpListener::bind(config.bind).await?;
     tracing::info!(address = %config.bind, "AudioDown Core listening");
 
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let mut tasks = JoinSet::new();
+    let (work_shutdown_tx, work_shutdown_rx) = watch::channel(false);
+    let (gateway_shutdown_tx, gateway_shutdown_rx) = watch::channel(false);
+    let mut work_tasks = JoinSet::new();
 
-    let gateway_shutdown = shutdown_rx.clone();
-    tasks.spawn(async move {
-        (
-            "proxy gateway",
-            proxy_gateway
-                .run(gateway_shutdown)
-                .await
-                .map_err(anyhow::Error::from),
-        )
+    let mut gateway_task = tokio::spawn(async move {
+        proxy_gateway
+            .run(gateway_shutdown_rx)
+            .await
+            .map_err(anyhow::Error::from)
     });
 
-    let lifecycle_shutdown = shutdown_rx.clone();
-    tasks.spawn(async move {
+    let lifecycle_shutdown = work_shutdown_rx.clone();
+    work_tasks.spawn(async move {
         run_lifecycle_reconciler(
             lifecycle_manager,
             config.plugin_reconcile_interval,
@@ -117,8 +126,8 @@ async fn main() -> anyhow::Result<()> {
         ("lifecycle reconciler", Ok::<(), anyhow::Error>(()))
     });
 
-    let server_shutdown = shutdown_rx;
-    tasks.spawn(async move {
+    let server_shutdown = work_shutdown_rx;
+    work_tasks.spawn(async move {
         let result = axum::serve(listener, app)
             .with_graceful_shutdown(wait_for_shutdown(server_shutdown))
             .await
@@ -127,26 +136,87 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let mut early_exit = None;
+    let mut early_failure = None;
+    let mut gateway_completed_early = false;
     tokio::select! {
         () = shutdown_signal() => {}
-        completed = tasks.join_next() => {
-            early_exit = Some(completed.ok_or_else(|| anyhow::anyhow!("Core task set was empty"))??);
+        completed = wait_for_core_task_exit(&mut work_tasks, &mut gateway_task) => {
+            match completed {
+                CoreTaskExit::Work { name, result } => early_exit = Some((name, result)),
+                CoreTaskExit::Gateway { result } => {
+                    gateway_completed_early = true;
+                    early_exit = Some(("proxy gateway", result));
+                }
+                CoreTaskExit::WorkJoinFailed(error) => early_failure = Some(error),
+                CoreTaskExit::GatewayJoinFailed(error) => {
+                    gateway_completed_early = true;
+                    early_failure = Some(error);
+                }
+                CoreTaskExit::WorkSetEmpty => {
+                    early_failure = Some(anyhow::anyhow!("Core task set was empty"));
+                }
+            }
         }
     }
-    let _ = shutdown_tx.send(true);
+    let _ = work_shutdown_tx.send(true);
 
-    let mut failure = None;
+    let mut failure = early_failure;
     if let Some((name, result)) = early_exit {
         failure = Some(match result {
             Ok(()) => anyhow::anyhow!("{name} exited unexpectedly"),
             Err(error) => error.context(format!("{name} failed")),
         });
     }
-    while let Some(completed) = tasks.join_next().await {
-        let (name, result) = completed?;
-        if let Err(error) = result {
-            failure.get_or_insert_with(|| error.context(format!("{name} failed")));
+    while let Some(completed) = work_tasks.join_next().await {
+        match completed {
+            Ok((name, result)) => {
+                if let Err(error) = result {
+                    failure.get_or_insert_with(|| error.context(format!("{name} failed")));
+                }
+            }
+            Err(error) => {
+                failure.get_or_insert_with(|| {
+                    anyhow::Error::new(error).context("failed to join Core work task")
+                });
+            }
         }
+    }
+
+    let shutdown_order = ShutdownOrder::default();
+    shutdown_order.record(ShutdownPhase::WorkQuiesced);
+    let cleanup_manager = plugin_manager.clone();
+    let cleanup = async move {
+        let report = cleanup_manager
+            .cleanup_all_runtimes()
+            .await
+            .map_err(anyhow::Error::from)?;
+        if report.failed > 0 {
+            tracing::error!(
+                failed = report.failed,
+                scanned = report.scanned,
+                "Core runtime cleanup did not complete for every plugin"
+            );
+            anyhow::bail!(
+                "Core runtime cleanup failed for {} of {} plugins",
+                report.failed,
+                report.scanned
+            );
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    let gateway_shutdown = async move {
+        if gateway_completed_early {
+            return Ok::<(), anyhow::Error>(());
+        }
+        let _ = gateway_shutdown_tx.send(true);
+        gateway_task
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|result| result)
+    };
+    if let Err(error) = finish_ordered_shutdown(&shutdown_order, cleanup, gateway_shutdown).await {
+        tracing::error!(error = %error, "Core ordered shutdown did not complete cleanly");
+        failure.get_or_insert_with(|| anyhow::anyhow!(error.to_string()));
     }
     if let Some(error) = failure {
         return Err(error);
