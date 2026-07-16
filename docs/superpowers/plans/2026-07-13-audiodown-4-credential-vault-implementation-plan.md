@@ -862,6 +862,15 @@ independent controller-dispatched re-review returns `Approved`.
 - [x] Second repair commit completed by this change.
 - [ ] Independent approval remains pending controller dispatch.
 
+**Third re-review repair (after `d17c569`):** Independent re-review found that
+HTTP/1 keep-alive could retain the connection-level Gateway permit after a
+successful relay. The repair disables HTTP/1 keep-alive, makes JSON responses
+explicitly close the connection, and adds a raw TCP regression for a client
+that requests keep-alive.
+
+- [x] Third-round keep-alive repair RED/GREEN completed.
+- [ ] Independent approval remains pending controller dispatch.
+
 ### Task 14: Invoke Credential Plugins through the Supervisor
 
 **Files:**

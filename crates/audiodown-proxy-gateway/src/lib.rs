@@ -95,6 +95,7 @@ pub async fn serve_with_limits(
             let mut builder = http1::Builder::new();
             builder
                 .timer(TokioTimer::new())
+                .keep_alive(false)
                 .header_read_timeout(limits.server_timeout);
             let _permit = permit;
             let _ = builder
@@ -291,6 +292,7 @@ fn json_response(status: StatusCode, body: Vec<u8>) -> Response<Body> {
         .status(status)
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::CACHE_CONTROL, "no-store")
+        .header(header::CONNECTION, "close")
         .body(Body::from(body))
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }

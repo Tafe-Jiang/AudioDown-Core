@@ -32,6 +32,40 @@ async fn relays_exactly_one_bounded_json_frame_without_reflecting_secrets() {
 }
 
 #[tokio::test]
+async fn closes_client_requested_keep_alive_after_one_relay() {
+    let fixture = RelayFixture::start().await;
+    let backend = fixture.spawn_backend(|_| async {
+        br#"{"status":200,"headers":{},"bodyBase64":null,"error":null}"#.to_vec()
+    });
+
+    let mut stream = TcpStream::connect(fixture.address).await.unwrap();
+    stream
+        .write_all(
+            b"POST / HTTP/1.1\r\nHost: gateway\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\n{}",
+        )
+        .await
+        .unwrap();
+    let (head, response) = read_http_response_body(&mut stream).await;
+
+    assert_eq!(response.status, 200);
+    backend.await.unwrap();
+
+    let mut byte = [0_u8; 1];
+    let read = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        stream.read(&mut byte),
+    )
+    .await
+    .expect("client-requested keep-alive connection must close after one response")
+    .unwrap();
+    assert_eq!(read, 0);
+    assert!(head
+        .lines()
+        .any(|line| line.eq_ignore_ascii_case("connection: close")));
+    fixture.shutdown();
+}
+
+#[tokio::test]
 async fn preserves_the_exact_one_mib_newline_frame_contract() {
     let fixture = RelayFixture::start().await;
     let request = json_frame_of_size(MAX_PROXY_FRAME_BYTES);
@@ -333,6 +367,39 @@ async fn read_http_response(mut stream: TcpStream) -> HttpResponse {
         status,
         body: response[separator + 4..].to_vec(),
     }
+}
+
+async fn read_http_response_body(stream: &mut TcpStream) -> (String, HttpResponse) {
+    let mut head_bytes = Vec::new();
+    let mut byte = [0_u8; 1];
+    loop {
+        stream.read_exact(&mut byte).await.unwrap();
+        head_bytes.push(byte[0]);
+        if head_bytes.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+    let separator = head_bytes.len() - 4;
+    let head = std::str::from_utf8(&head_bytes[..separator]).unwrap();
+    let content_length = head
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Content-Length:")
+                .or_else(|| line.strip_prefix("content-length:"))
+        })
+        .unwrap()
+        .trim()
+        .parse::<usize>()
+        .unwrap();
+    let mut body = vec![0_u8; content_length];
+    stream.read_exact(&mut body).await.unwrap();
+    let status = head
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse::<u16>()
+        .unwrap();
+    (head.to_owned(), HttpResponse { status, body })
 }
 
 async fn raw_http_exchange(address: SocketAddr, request: &[u8]) -> Vec<u8> {
