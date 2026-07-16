@@ -764,7 +764,7 @@ async fn keeps_generation_when_stop_cleanup_fails() {
 }
 
 #[tokio::test]
-async fn inspect_error_revokes_generation_after_confirmed_cleanup() {
+async fn inspect_error_returns_stopped_after_confirmed_cleanup() {
     let endpoint = TestEndpoint::new("supervisor-runtime-inspect-failure");
     let listener = UnixListener::bind(&endpoint.socket).unwrap();
     let plugin_id = PluginId::parse("com.audiodown.virtual.content").unwrap();
@@ -845,7 +845,107 @@ async fn inspect_error_revokes_generation_after_confirmed_cleanup() {
 
     runtime.start(&plugin_id).await.unwrap();
     let token = seen_token.lock().await.clone().unwrap();
-    assert!(runtime.inspect(&plugin_id).await.is_err());
+    let inspected = runtime.inspect(&plugin_id).await.unwrap();
+    assert_eq!(
+        inspected.status,
+        audiodown_domain::plugin::PluginStatus::Stopped
+    );
+    assert!(registry.authenticate(&token).is_err());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn non_healthy_inspect_returns_stopped_after_confirmed_cleanup() {
+    let endpoint = TestEndpoint::new("supervisor-runtime-inspect-unhealthy");
+    let listener = UnixListener::bind(&endpoint.socket).unwrap();
+    let plugin_id = PluginId::parse("com.audiodown.virtual.content").unwrap();
+    let expected_plugin = plugin_id.clone();
+    let seen_token = std::sync::Arc::new(tokio::sync::Mutex::new(None::<String>));
+    let captured_token = seen_token.clone();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+        let mut request = String::new();
+        BufReader::new(reader)
+            .read_line(&mut request)
+            .await
+            .unwrap();
+        let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+        *captured_token.lock().await = request["params"]["proxyToken"].as_str().map(str::to_string);
+        let response = serde_json::json!({
+            "id": request["id"],
+            "ok": true,
+            "result": {
+                "pluginId": expected_plugin,
+                "status": "healthy",
+                "containerId": "plugin-container",
+                "logs": []
+            }
+        });
+        writer
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+        let mut request = String::new();
+        BufReader::new(reader)
+            .read_line(&mut request)
+            .await
+            .unwrap();
+        let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+        assert_eq!(request["method"], "plugin.inspect");
+        let response = serde_json::json!({
+            "id": request["id"],
+            "ok": true,
+            "result": {
+                "pluginId": expected_plugin,
+                "status": "unhealthy",
+                "containerId": "plugin-container",
+                "logs": []
+            }
+        });
+        writer
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+        let mut request = String::new();
+        BufReader::new(reader)
+            .read_line(&mut request)
+            .await
+            .unwrap();
+        let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+        assert_eq!(request["method"], "plugin.stop");
+        let response = serde_json::json!({
+            "id": request["id"],
+            "ok": true,
+            "result": {
+                "pluginId": expected_plugin,
+                "status": "stopped",
+                "containerId": "plugin-container"
+            }
+        });
+        writer
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+    });
+    let registry = std::sync::Arc::new(ProxyTokenRegistry::new());
+    let client: std::sync::Arc<dyn SupervisorClient> =
+        std::sync::Arc::new(UnixSupervisorClient::new(&endpoint.socket, &endpoint.token));
+    let runtime = SupervisorPluginRuntime::with_proxy_tokens(client, registry.clone());
+
+    runtime.start(&plugin_id).await.unwrap();
+    let token = seen_token.lock().await.clone().unwrap();
+    let inspected = runtime.inspect(&plugin_id).await.unwrap();
+    assert_eq!(
+        inspected.status,
+        audiodown_domain::plugin::PluginStatus::Stopped
+    );
     assert!(registry.authenticate(&token).is_err());
     server.await.unwrap();
 }

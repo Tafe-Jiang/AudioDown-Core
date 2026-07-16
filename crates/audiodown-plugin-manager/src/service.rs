@@ -558,7 +558,11 @@ impl PluginManagerService {
         };
         self.validate_runtime(&runtime, plugin_id)?;
         self.persist_runtime_logs(&record, &runtime).await?;
-        record.status = runtime.status;
+        record.status = if runtime.status == PluginStatus::Stopped {
+            inactive_status(record.enabled)
+        } else {
+            runtime.status
+        };
         record.last_error = None;
         record.updated_at = Utc::now();
         self.save_and_reload(record).await
@@ -788,6 +792,10 @@ impl PluginManagerService {
             ..RuntimeCleanupReport::default()
         };
         for record in records {
+            if record.status == PluginStatus::Installing {
+                report.skipped_installing += 1;
+                continue;
+            }
             let plugin_id = record.plugin_id.clone();
             match self.cleanup_runtime_for_record(record).await {
                 Ok(()) => report.cleaned += 1,
@@ -955,6 +963,12 @@ impl PluginManagerService {
             return self.rollback_started_runtime(record, error).await;
         }
         if inspected.status != PluginStatus::Healthy {
+            if inspected.status == PluginStatus::Stopped {
+                record.status = inactive_status(record.enabled);
+                record.last_error = Some("plugin runtime action failed".to_string());
+                record.updated_at = Utc::now();
+                return Err(PluginManagementError::InvalidRuntimeState);
+            }
             return self
                 .rollback_started_runtime(record, PluginManagementError::InvalidRuntimeState)
                 .await;
@@ -1648,6 +1662,7 @@ pub struct LifecycleReconcileReport {
 pub struct RuntimeCleanupReport {
     pub scanned: usize,
     pub cleaned: usize,
+    pub skipped_installing: usize,
     pub failed: usize,
     pub failures: Vec<RuntimeCleanupFailure>,
 }

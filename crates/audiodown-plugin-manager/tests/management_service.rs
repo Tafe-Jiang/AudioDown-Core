@@ -299,6 +299,48 @@ async fn cleanup_all_runtimes_keeps_stopped_status_after_log_persistence_failure
 }
 
 #[tokio::test]
+async fn cleanup_all_runtimes_preserves_installing_records_for_reconciliation() {
+    let fixture = Fixture::new();
+    let operation_id = Uuid::new_v4();
+    fixture.store.mutate(&fixture.plugin_id, |record| {
+        record.status = PluginStatus::Installing;
+        record.operation_id = operation_id;
+        record.install_operation_id = Some(operation_id);
+    });
+
+    let report = fixture.service.cleanup_all_runtimes().await.unwrap();
+
+    assert_eq!(report.scanned, 1);
+    assert_eq!(report.cleaned, 0);
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.skipped_installing, 1);
+    assert!(fixture.runtime.events().is_empty());
+    let record = fixture.store.record(&fixture.plugin_id).unwrap();
+    assert_eq!(record.status, PluginStatus::Installing);
+    assert_eq!(record.operation_id, operation_id);
+    assert_eq!(record.install_operation_id, Some(operation_id));
+}
+
+#[tokio::test]
+async fn inspect_runtime_preserves_disabled_state_after_confirmed_stop() {
+    let fixture = Fixture::new();
+    fixture.store.mutate(&fixture.plugin_id, |record| {
+        record.enabled = false;
+        record.status = PluginStatus::Disabled;
+    });
+    fixture.runtime.set_inspect_status(PluginStatus::Stopped);
+
+    let inspected = fixture
+        .service
+        .inspect_runtime(&fixture.plugin_id)
+        .await
+        .unwrap();
+
+    assert_eq!(inspected.status, PluginStatus::Disabled);
+    assert_eq!(fixture.runtime.events(), vec!["inspect"]);
+}
+
+#[tokio::test]
 async fn uninstall_removes_runtime_assets_before_sqlite_and_preserves_failures() {
     let fixture = Fixture::new();
     fixture.service.uninstall(&fixture.plugin_id).await.unwrap();

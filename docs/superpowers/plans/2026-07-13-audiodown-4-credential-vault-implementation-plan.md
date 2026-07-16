@@ -916,7 +916,23 @@ independent review returns `Approved`.
 
 - [x] Final lifecycle Rust, Clippy, workspace, Compose, and Core-only restart
   security verification completed on 2026-07-16.
-- [ ] Final lifecycle repair commit and independent approval remain pending.
+- [x] Final lifecycle repair committed as `a57cdd8` on 2026-07-16.
+
+**Post-`a57cdd8` state-consistency repair:** Final review found that global
+runtime cleanup changed `Installing` records before install reconciliation, and
+that confirmed inspect cleanup revoked the token while returning the stale
+error or pre-cleanup runtime state. Cleanup must skip installations without
+changing operation IDs. Confirmed cleanup must return `Stopped` so the manager
+persists `Stopped` or `Disabled`; failed cleanup must still return an error and
+preserve the current generation.
+
+- [x] Added and confirmed failing regressions for installing-record preservation
+  and final inspect state.
+- [x] Implemented the minimum manager and Supervisor adapter consistency repair.
+- [x] Plugin-manager and Supervisor client focused suites, full affected Rust
+  suites, Clippy, workspace checks, Compose validation, and the real Docker
+  security boundary passed on 2026-07-16.
+- [ ] Independent approval remains pending; Task 14 stays blocked.
 
 ### Task 14: Invoke Credential Plugins through the Supervisor
 

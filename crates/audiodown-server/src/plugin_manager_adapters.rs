@@ -483,29 +483,27 @@ impl PluginRuntimeControl for SupervisorPluginRuntime {
         let generation = self.current_generation(plugin_id);
         let state = match self.client.inspect_plugin(plugin_id).await {
             Ok(state) => state,
-            Err(error) => {
-                self.confirm_cleanup(plugin_id).await?;
+            Err(_) => {
+                let stopped = self.confirm_cleanup(plugin_id).await?;
                 if let Some(generation) = generation {
                     self.revoke_if_current(plugin_id, generation);
                 }
-                return Err(runtime_error(error));
+                return Ok(stopped);
             }
         };
         if state.plugin_id != *plugin_id {
-            self.confirm_cleanup(plugin_id).await?;
+            let stopped = self.confirm_cleanup(plugin_id).await?;
             if let Some(generation) = generation {
                 self.revoke_if_current(plugin_id, generation);
             }
-            return Err(PluginManagerError::RuntimeUnavailable);
+            return Ok(stopped);
         }
         if state.status != PluginStatus::Healthy || generation.is_none() {
             let stopped = self.confirm_cleanup(plugin_id).await?;
             if let Some(generation) = generation {
                 self.revoke_if_current(plugin_id, generation);
             }
-            if state.status == PluginStatus::Healthy {
-                return Ok(stopped);
-            }
+            return Ok(stopped);
         }
         Ok(state)
     }
